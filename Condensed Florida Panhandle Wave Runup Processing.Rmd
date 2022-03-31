@@ -1,0 +1,1055 @@
+---
+title: "Florida Panhandle Wave Runup"
+author: "Matt Ware"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+  
+# Project Background  
+  
+Sea turtle embryos require a narrow range of incubation conditions (e.g., temperature, moisture content, gas exchange) in order to properly develop. Nest productivity and hatchling fitness can be significantly impacted by increased moisture and reduced gas exchange from inundation of clutches from tides, groundwater, and wave exposure, as well as altered salinity, and changes in beach geomorphology resultant from nest erosion or accretion. To reduce the chances of  nest inundation and maximize nest productivity, nesting females use several environmental cues such as beach slope, tide height, and distance from the water when selecting nesting sites. Nesting females will also lay several nests throughout the nesting season in order to minimize the risk of complete reproductive failure during a given season.  
+  
+Despite the efforts of the female, nest inundation and erosion from wave exposure is a common occurrence, particularly during hurricane season. Coastal modifications such as back-beach construction, coastal armoring, and beach renourishment can also reduce the extent of available nesting beach and alter the beach topography, subsequently increasing the risk of nest inundation and erosion. Nest loss to inundation and the reduction of suitable nesting beach habitat with coastal development is of concern, particularly for small, genetically distinct populations of sea turtles.  
+  
+Mitigating losses at sites with high nesting density and high exposure to waves could lead to significant gains in hatchling production. Similarly, protecting nesting sites with high nesting density and low wave exposure could help buffer sea turtle populations from climate change and coastal development-related threats. The identification of such high-priority nesting sites will allow managers to target conservation resources and interventions where there will be the most potential for population gain, maximizing conservation efforts. To inform management of the Florida portion of the northern Gulf of Mexico loggerhead recovery unit, we incorporated remote sensing data with wave run up models and quantified the proportion of available nesting habitat and nesting sites at risk of inundation as well as identified high-priority nesting sites, which are those that would benefit the most from protection and interventions when considering exposure to inundation from wave activity.  
+  
+This R Markdown documents the preparation of the beach digital elevation model (DEM), mapping of wave exposure, and an accuracy assessment of wave exposure model performance. This methodology follows that used in Ware et al. (2019) using the wave runup formulation of Stockdon et al. (2006).  
+  
+**Ware et al. (2019) Using wave runup modeling to inform coastal species management: An example application for sea turtle nest relocation. Ocean and Coastal Management 173: 17-25.**  
+  
+**Stockdon et al. (2006) Empirical parameterization of setup, swash, and runup. Coastal Engineering 53: 573-588.**  
+  
+## Data Processing Record  
+  
+Load the required libraries.  
+  
+```{r libraries, message = FALSE, echo = TRUE}
+
+library(dplyr)
+library(gridExtra)
+library(ggplot2)
+library(ggpubr)
+library(knitr)
+library(leaflet)
+library(plotrix)
+library(raster)
+library(rgdal)
+library(sf)
+library(sp)
+library(stringr)
+
+```
+```{r version}
+
+paste0("This RMarkdown and the included analyses were built using ", R.Version()$version.string)
+
+```
+  
+***  
+***  
+  
+## ArcGIS Preprocessing of LiDAR rasters  
+  
+Each LiDAR layer was either downloaded from the NOAA Data Access Viewer (https://coast.noaa.gov/dataviewer/#/) directly with, or was transformed to match, the following specifications:  
+  
+Horizontal Datum: State Plane 1983 Florida North FIPS 0903
+Resolution: 3 x 3  
+Units: meters  
+  
+Vertical Datum: NAVD88  
+Units: meters  
+  
+All return points were included in order to help identify back-shore construction and vegetation delineating the back-beach boundary as prominent dunes are not present throughout most of the study area. As indicated by Doran et al. (2015), since the exposed beach contains little vegetation, there is no significant difference in beach slopes and elevations derived from first return and bare earth data.  
+  
+**Doran KS, Long JW, Overbeck JR (2015) A method for determining average beach slope and beach slope variability for U.S. sandy coastlines. U.S. Geological Survey Open-File Report 2015-1053, 5 p.**  
+  
+
+Across the Florida Panhandle study area, 23 layers were available from 1998 to 2018:  
+  
+2018 USACE NCMP Panhandle Post-Michael: https://coast.noaa.gov/htdata/lidar2_z/geoid12b/data/8625/  
+2018 USGS Coastal LiDAR Franklin County: https://coast.noaa.gov/htdata/lidar3_z/geoid18/data/8945/  
+2018 USACE NCMP Santa Rosa Sound: https://coast.noaa.gov/htdata/lidar2_z/geoid12b/data/8619/  
+2017 NOAA Dog Island: https://coast.noaa.gov/htdata/lidar3_z/geoid12b/data/8779/  
+2017 NWFWMD Lower Choctawhatchee: https://coast.noaa.gov/htdata/lidar2_z/geoid12b/data/8681/  
+2017 NWFWMD Escambia County: https://coast.noaa.gov/htdata/lidar2_z/geoid12b/data/8680/    
+2016 USACE NCMP Escambia and Santa Rosa Counties: https://coast.noaa.gov/htdata/lidar2_z/geoid12b/data/5186/    
+2015 USACE NCMP Walton and Bay Counties: https://coast.noaa.gov/htdata/lidar2_z/geoid12b/data/5183/  
+2010 USACE NCMP Panhandle: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/1064/  
+2007 FDEM Okaloosa County: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/562/  
+2007 FDEM Bay County: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/527/  
+2007 FDEM Gulf County: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/534/  
+2007 USGS Coastal LiDAR Perdido Key: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/522/  
+2007 FDEM Franklin County: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/536/  
+2006 USACE NCMP Panama City Beach: https://coast.noaa.gov/htdata/lidar3_z/geoid12b/data/8766/  
+2006 NWFWMD Panhandle: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/57/  
+2005 USACE NCMP Panhandle Post-Dennis: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/29/  
+2005 USACE NCMP Panhandle Post-Katrina: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/31/  
+2004 USACE NCMP Panhandle Post-Ivan: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/37/  
+2004 USGS Coastal LiDAR Panhandle Post-Ivan: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/1123/  
+2004 USACE NCMP Panhandle Pre-Ivan: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/19/  
+2001 USGS Coastal LiDAR Panhandle: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/525/  
+1998 NASA/NOAA/USGS Panhandle: https://coast.noaa.gov/htdata/lidar1_z/geoid12a/data/22/  
+  
+  
+NASA: U.S. National Aeronautics and Space Administration  
+NOAA: U.S. National Oceanic and Atmospheric Administration  
+USGS: U.S. Geological Survey  
+USACE NCMP: U.S. Army Corps of Engineers National Coastal Mapping Program  
+NWFWMD: Northwest Florida Water Management District  
+FDEM: Florida Department of Emergency Management  
+  
+The layers were read into ArcMap for visualization and additional processing as follows: Since each layer did not cover the same extent, they were each exported using the Raster Calculator to fit the extent of, and snapped to, a rasterized study area (i.e., Florida Panhandle Study Area Raster) to fill areas of NoData as NA. The Florida Panhandle Study Area Raster extended from 161496m to 50796m north to south and 290685m to 637287m west to east. With 3m x 3m cells, the Florida Panhandle Study Area Raster is 115,534 columns wide and 36,900 rows high (4,263,204,600 cells total).  
+  
+### Creation of Time-Averaged Beach Elevation Raster  
+  
+With the layers now covering the same extent, they were imported into R as a RasterStack.  
+  
+```{r data_import, eval = FALSE}
+
+panhandle1998 <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/1998 NASA Panhandle.tif")
+panhandleUSGS2001 <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2001 USGS Panhandle.tif")
+panhandleUSACE2004PreIvan <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2004 USACE Panhandle PreIvan.tif")
+panhandleUSGS2004PostIvan <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2004 USGS Panhandle PostIvan.tif")
+panhandleUSACE2004PostIvan <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2004 USACE Panhandle PostIvan.tif")
+panhandleUSACE2005PostDennis <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2005 USACE Panhandle PostDennis.tif")
+panhandleUSACE2005PostKatrina <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2005 USACE Panhandle PostKatrina.tif")
+panhandleNWFWMD2006 <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2006 NWFWMD Panhandle.tif")
+pcbUSACE2006 <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2006 USACE PCB.tif")
+panhandleCombined2007 <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2007 Combined Panhandle.tif")
+panhandleUSACE2010 <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2010 USACE Panhandle.tif")
+waltonBayUSACE2015 <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2015 USACE WaltonBay.tif")
+escambiaSantaRosaUSACE2016 <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2016 USACE EscambiaSantaRosa.tif")
+panhandleCombined2017 <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2017 Combined Panhandle.tif")
+santaRosaUSACE2018 <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2017 USACE SantaRosa.tif")
+franklinUSGS2018 <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2018 USGS Franklin.tif")
+panhandleUSACE2018PostMichael <- raster("D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/2018 USACE Panhandle.tif")
+
+
+LiDARStack <- stack(panhandle1998, panhandleUSGS2001, panhandleUSACE2004PreIvan, panhandleUSGS2004PostIvan, panhandleUSACE2004PostIvan, 
+                    panhandleUSACE2005PostDennis, panhandleUSACE2005PostKatrina, panhandleNWFWMD2006, pcbUSACE2006, panhandleCombined2007,
+                    panhandleUSACE2010, waltonBayUSACE2015, escambiaSantaRosaUSACE2016, panhandleCombined2017, santaRosaUSACE2018,
+                    franklinUSGS2018, panhandleUSACE2018PostMichael)
+
+```
+  
+The average/standard deviation/max/min beach elevation and number of observations per cell were calculated from the RasterStack and the results written to GeoTIFF for further processing/visualization in ArcMap. **Depending on computing capabilities, this code chunk can take many hours to complete - mostly due to the standard deviation raster calculations.**  
+  
+```{r calculations, eval = FALSE, warning = FALSE, message = FALSE, echo = FALSE}
+
+runTime <- Sys.time()
+
+avgBeach <- calc(LiDARStack, fun = mean, na.rm = TRUE, progress = "window")
+writeRaster(avgBeach, "D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/FLPanhandleAverageBeach", format = "GTiff", overwrite = TRUE, 
+            progress = "window")
+
+countBeach <- sum(!is.na(LiDARStack))
+writeRaster(countBeach, "D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/FLPanhandleCountBeach", format = "GTiff", overwrite = TRUE, 
+            progress = "window")
+
+maxBeach <- calc(LiDARStack, fun = max, na.rm = TRUE, progress = "window")
+writeRaster(maxBeach, "D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/FLPanhandleMaxBeach", format = "GTiff", overwrite = TRUE, 
+            progress = "window")
+
+minBeach <- calc(LiDARStack, fun = min, na.rm = TRUE, progress = "window")
+writeRaster(minBeach, "D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/FLPanhandleMinBeach", format = "GTiff", overwrite = TRUE, 
+            progress = "window")
+
+sdBeach <- calc(LiDARStack, fun = sd, na.rm = TRUE, progress = "window")
+writeRaster(sdBeach, "D:/Projects/Florida Panhandle Wave Runup/R LiDAR Files/FLPanhandleSDBeach", format = "GTiff", overwrite = TRUE, 
+            progress = "window")
+
+Sys.time() - runTime
+
+```
+  
+***  
+***  
+  
+## Defining nesting beach polygons and slope  
+  
+Once brought into ArcMap, a polygon bounding the available nesting beach area was digitized at 1:3000 scale using the mean lower low water level of the average beach elevation raster (derived from local tide gauges) as the seaward boundary and the dune crest, dense vegetation, or back-beach construction (derived from the average beach elevation raster and/or aerial imagery) as the landward boundary. Given the small tidal range typical of the northern Gulf of Mexico (~0.42m) and that sea turtles may come up to nest at any tidal height, these boundary definitions provide the largest possible nesting beach area. This polygon was then divided into individual beach monitoring units based on the borders specified by the Florida Fish and Wildlife Conservation Commission for each sea turtle permit holder.  
+  
+To extract beach slope, cross-shore transects were plotted every 200m along the length of the study area. Each transect terminated at the mean sea level shoreline (seaward boundary, based on local tide gauges and average beach elevation raster) and the dune toe/dense vegetation/back-beach construction (landward boundary, based on average beach elevation raster and/or aerial imagery) - adapted from Doran et al. (2015) who defined the shoreline as mean high water rather than mean sea level. The slope of the transect was calculated trigonometrically based on the elevation of the transect endpoints and the distance between them. These transects can also be used to visualize the beach profile and its variability, as below.  
+  
+```{r beach_profile_1, fig.height = 4, fig.width = 6}
+
+cross_shore_Transects <- read.csv("Cross-shore_Transects.csv", header = TRUE)
+
+paste0("The average cross-shore beach slope (mean high water to dune toe) is: ", round(mean(cross_shore_Transects$Avg_Slope_Degrees), 1), 
+       " degrees (", round(mean(cross_shore_Transects$Avg_Slope_Radians), 4), " radians).")
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5))
+plot(density(cross_shore_Transects$Avg_Slope_Radians), xlab = "Beach slope (rad)", main = "Beach Slope Distribution", lwd = 2, cex.axis = 1.2,
+     cex.lab = 1.1)
+
+```
+```{r beach_profile_2, message = FALSE, warning = FALSE, fig.height = 7.5, fig.width = 10}
+
+exampleTransects <- read.csv("Example Profiles.csv", header = TRUE)
+
+Transect_SGI <- exampleTransects[exampleTransects$LINE_ID == "Saint George Island",]
+Transect_SJPSP <- exampleTransects[exampleTransects$LINE_ID == "Saint Joseph Peninsula State Park",]
+Transect_PCB <- exampleTransects[exampleTransects$LINE_ID == "Panama City Beach",]
+Transect_GINSSR <- exampleTransects[exampleTransects$LINE_ID == "Gulf Islands National Seashore - Santa Rosa",]
+
+p1 <- ggplot(data = Transect_SGI[Transect_SGI$Layer == "Max",], 
+               aes(x = Distance, y = Elevation)) + geom_line(aes(linetype = "solid")) + 
+  ggtitle("Saint George Island") + xlab("Distance (m)") + ylab("Elevation (m, NAVD88)") + 
+  geom_ribbon(aes(ymin = Transect_SGI[Transect_SGI$Layer == "Mean",]$Elevation - 
+                    Transect_SGI[Transect_SGI$Layer == "SD",]$Elevation,
+                  ymax = Transect_SGI[Transect_SGI$Layer == "Mean",]$Elevation + 
+                    Transect_SGI[Transect_SGI$Layer == "SD",]$Elevation, 
+                  fill = "grey"), linetype = 2, alpha = 0.7) + 
+  geom_hline(yintercept = 0.045, linetype = 3, alpha = 0.3) + 
+  geom_line(data = Transect_SGI[Transect_SGI$Layer == "Mean",], aes(x = Distance, y = Elevation, linetype = "Mean"), 
+            alpha = 0.5) +
+  geom_line(data = Transect_SGI[Transect_SGI$Layer == "Min",], aes(x = Distance, y = Elevation, linetype = "Min"), 
+            alpha = 0.5) +
+  scale_linetype_manual(name = "", values = c("solid","dashed", "dashed"), labels = c("Mean", "Max", "Min"), guide = "legend") +
+  scale_fill_identity(name = "", guide = "legend", labels = "Standard Deviation") + 
+  theme_classic() + theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 12, family = "serif")) + 
+  coord_cartesian(ylim = c(-1.25, 12.25), xlim = c(0, 150))
+
+p2 <- ggplot(data = Transect_SJPSP[Transect_SJPSP$Layer == "Max",], 
+               aes(x = Distance, y = Elevation)) + geom_line(aes(linetype = "solid")) + 
+  ggtitle("Saint Joseph Peninsula State Park") + xlab("Distance (m)") + ylab("Elevation (m, NAVD88)") + 
+  geom_ribbon(aes(ymin = Transect_SJPSP[Transect_SJPSP$Layer == "Mean",]$Elevation - 
+                    Transect_SJPSP[Transect_SJPSP$Layer == "SD",]$Elevation,
+                  ymax = Transect_SJPSP[Transect_SJPSP$Layer == "Mean",]$Elevation + 
+                    Transect_SJPSP[Transect_SJPSP$Layer == "SD",]$Elevation, 
+                  fill = "grey"), linetype = 2, alpha = 0.7) + 
+  geom_hline(yintercept = 0.045, linetype = 3, alpha = 0.3) + 
+  geom_line(data = Transect_SJPSP[Transect_SJPSP$Layer == "Mean",], aes(x = Distance, y = Elevation, linetype = "Mean"), 
+            alpha = 0.5) +
+  geom_line(data = Transect_SJPSP[Transect_SJPSP$Layer == "Min",], aes(x = Distance, y = Elevation, linetype = "Min"), 
+            alpha = 0.5) +
+  scale_linetype_manual(name = "", values = c("solid","dashed", "dashed"), labels = c("Mean", "Max", "Min"), guide = "legend") +
+  scale_fill_identity(name = "", guide = "legend", labels = "Standard Deviation") + 
+  theme_classic() + theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 12, family = "serif")) + 
+  coord_cartesian(ylim = c(-1.25, 12.25), xlim = c(0, 150))
+
+p3 <- ggplot(data = Transect_PCB[Transect_PCB$Layer == "Max",], 
+               aes(x = Distance, y = Elevation)) + geom_line(aes(linetype = "solid")) + 
+  ggtitle("Panama City Beach") + xlab("Distance (m)") + ylab("Elevation (m, NAVD88)") + 
+  geom_ribbon(aes(ymin = Transect_PCB[Transect_PCB$Layer == "Mean",]$Elevation - 
+                    Transect_PCB[Transect_PCB$Layer == "SD",]$Elevation,
+                  ymax = Transect_PCB[Transect_PCB$Layer == "Mean",]$Elevation + 
+                    Transect_PCB[Transect_PCB$Layer == "SD",]$Elevation, 
+                  fill = "grey"), linetype = 2, alpha = 0.7) + 
+  geom_hline(yintercept = 0.045, linetype = 3, alpha = 0.3) + 
+  geom_line(data = Transect_PCB[Transect_PCB$Layer == "Mean",], aes(x = Distance, y = Elevation, linetype = "Mean"), 
+            alpha = 0.5) +
+  geom_line(data = Transect_PCB[Transect_PCB$Layer == "Min",], aes(x = Distance, y = Elevation, linetype = "Min"), 
+            alpha = 0.5) +
+  scale_linetype_manual(name = "", values = c("solid","dashed", "dashed"), labels = c("Mean", "Max", "Min"), guide = "legend") +
+  scale_fill_identity(name = "", guide = "legend", labels = "Standard Deviation") + 
+  theme_classic() + theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 12, family = "serif")) + 
+  coord_cartesian(ylim = c(-1.25, 12.25), xlim = c(0, 150))
+
+p4 <- ggplot(data = Transect_GINSSR[Transect_GINSSR$Layer == "Max",], 
+               aes(x = Distance, y = Elevation)) + geom_line(aes(linetype = "solid")) + 
+  ggtitle("Pensacola Beach") + xlab("Distance (m)") + ylab("Elevation (m, NAVD88)") + 
+  geom_ribbon(aes(ymin = Transect_GINSSR[Transect_GINSSR$Layer == "Mean",]$Elevation - 
+                    Transect_GINSSR[Transect_GINSSR$Layer == "SD",]$Elevation,
+                  ymax = Transect_GINSSR[Transect_GINSSR$Layer == "Mean",]$Elevation + 
+                    Transect_GINSSR[Transect_GINSSR$Layer == "SD",]$Elevation, 
+                  fill = "grey"), linetype = 2, alpha = 0.7) + 
+  geom_hline(yintercept = 0.045, linetype = 3, alpha = 0.3) + 
+  geom_line(data = Transect_GINSSR[Transect_GINSSR$Layer == "Mean",], aes(x = Distance, y = Elevation, linetype = "Mean"), 
+            alpha = 0.5) +
+  geom_line(data = Transect_GINSSR[Transect_GINSSR$Layer == "Min",], aes(x = Distance, y = Elevation, linetype = "Min"), 
+            alpha = 0.5) +
+  scale_linetype_manual(name = "", values = c("solid","dashed", "dashed"), labels = c("Mean", "Max", "Min"), guide = "legend") +
+  scale_fill_identity(name = "", guide = "legend", labels = "Standard Deviation") + 
+  theme_classic() + theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 12, family = "serif")) + 
+  coord_cartesian(ylim = c(-1.25, 12.25), xlim = c(0, 150))
+
+pdf(NULL)
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 2))
+pMult <- ggarrange(p1, p2, p3, p4, nrow = 2, ncol = 2, common.legend = TRUE, legend = "bottom")
+X <- dev.off()
+pMult
+
+```
+  
+***  
+***  
+  
+## Wave Exposure Spatial Assessment  
+  
+The wave runup model requires: 1) beach elevation, 2) cross-shore slope, 3) tide height, 4) offshore wave height, and 5) offshore wavelength. The average beach elevation raster was clipped to the available nesting polygon to isolate wave runup calculations to only areas available for sea turtle nesting. Beach slope was extrapolated from the 1938 cross-shore transects to the full beach area by converting the cross-shore transects to Thiessen polygons. These polygons were then clipped to the available nesting polygon and rasterized to 3m grid cells to match the average beach elevation raster.  
+  
+As nesting data from 2016 to 2019 was used in this project, only tide and offshore wave data during these nesting seasons (i.e., May to October, 2016 to 2019) were used in this analysis. Data were available from 4 tide stations (see Panhandle Tide Summary) and 3 offshore buoys (see Panhandle Buoy Summary). No gaps were present during this time in the tide station data. Short gaps (i.e., 3 hours or less) in any of the buoy records were filled in by linear interpolation. Longer gaps were filled in based on the relationships established in the respective Summary file from the highest-correlated station/buoy available. Total water level (TWL, tide height + wave runup) at each pixel was calculated using the nearest tide station and offshore buoy using the wave runup formulation of Stockdon et al. (2006):  
+  
+$R_2 = 1.1(0.35\beta_f(H_0L_0)^\frac{1}{2} + \frac{[H_0L_0(0.563\beta^2_f + 0.004)]^\frac{1}{2}}{2})$  
+  
+where $R_2$ is the 2% exceedance elevation (m) of wave runup, $\beta_f$ is the beach slope (radians), $H_0$ is the deep-water wave height (m), and $L_0$ is the deep-water wavelength (m). The first term in parentheses is the wave setup, the time-averaged elevation of the water level at the shoreline due to wave accumulation, while the second term is swash, the time-varying uprush and rundown of the water level caused by individual waves. Previous work conducted in neighboring Alabama by Ware et al. (2019) demonstrated that this wave runup formulation using the mean high water to dune toe cross-shore beach slope was the most accurate for determining the presence or absence of wave wash-over. To reduce the computational load, only daily maxima for tide height, wave height, and wavelength were used. Across the 4 years studied, only 4 days were missing wave height or wavelength observations for the full day at 1 or more buoys.  
+  
+There is a dissipative beach-specific formulation for wave runup provided by Stockdon et al. (2006) in which beach slope $\beta_f$ is irrelevant:  
+  
+$R_2 = 0.043(H_0L_0)^{\frac{1}{2}}$  
+  
+Both of these formulations will be evaluated later with respect to modeled wash-over accuracy, frequency, and duration.  
+  
+**Stockdon et al. (2006) Empirical parameterization of setup, swash, and runup. Coastal Engineering 53: 573-588.**  
+  
+Pixels with elevation values less than the total water level were considered exposed. The frequency of exposure at each pixel was calculated (sum) and converted to proportion exposure by dividing the frequency by the total number of TWL estimate (n = 732). This full procedure was previously used to calculate wave exposure for loggerhead sea turtle (*Caretta caretta*) nests along Alabama's Gulf coast in Ware et al. (2019).  
+  
+**Ware et al. (2019) Using wave runup modeling to inform coastal species management: An example application for sea turtle nest relocation. Ocean and Coastal Management 173: 17-25.**  
+  
+```{r tide_daily, warning = FALSE, message = FALSE}
+
+tidesHourly <- read.csv("Tide Data - Wave Runup Hourly.csv", header = TRUE)
+tidesHourly$Date <- as.POSIXct(tidesHourly$Date, format = "%m/%d/%Y")
+tidesHourly$Date.Time..GMT. <- as.POSIXct(tidesHourly$Date.Time..GMT., format = "%m/%d/%Y %H:%M")
+
+tidesHourly_Nest <- tidesHourly %>%
+  filter(Turtle.Season == "Yes")
+
+buoysHourly <- read.csv("Buoy Data - Wave Runup Hourly.csv", header = TRUE)
+buoysHourly$Date <- as.POSIXct(buoysHourly$Date, format = "%m/%d/%Y")
+buoysHourly$Date.Time..GMT. <- as.POSIXct(buoysHourly$Date.Time..GMT., format = "%m/%d/%Y %H:%M")
+
+buoysHourly_Nest <- buoysHourly %>%
+  filter(Turtle.Season == "Yes")
+
+dailyMax_Tides <- tidesHourly_Nest %>%
+  group_by(Date) %>%
+  summarise(maxPensTide = max(Pensacola, na.rm = TRUE), maxPCBTide = max(Panama.City.Beach, na.rm = TRUE), maxPCTide = max(Panama.City, 
+                                                                                                                           na.rm = TRUE),
+            maxApalTide = max(Apalachicola, na.rm = TRUE)) %>%
+  mutate(maxPensTide = ifelse(is.infinite(maxPensTide), NA, maxPensTide), maxPCBTide = ifelse(is.infinite(maxPCBTide), NA, maxPCBTide),
+         maxPCTide = ifelse(is.infinite(maxPCTide), NA, maxPCTide), maxApalTide = ifelse(is.infinite(maxApalTide), NA, maxApalTide))
+
+dailyMax_WaveHeight <- buoysHourly_Nest %>%
+  group_by(Date) %>%
+  summarise(maxOBHT = max(OB_HT_runup, na.rm = TRUE), maxPensHT = max(Pens_HT_runup, na.rm = TRUE), 
+            maxWTHT = max(WT_HT_runup, na.rm = TRUE)) %>%
+  mutate(maxOBHT = ifelse(is.infinite(maxOBHT), NA, maxOBHT), maxPensHT = ifelse(is.infinite(maxPensHT), NA, maxPensHT),
+         maxWTHT = ifelse(is.infinite(maxWTHT), NA, maxWTHT))
+
+dailyMax_WaveLength <- buoysHourly_Nest %>%
+  group_by(Date) %>%
+  summarise(maxOBWL = max(OB_WL_runup, na.rm = TRUE), maxPensWL = max(Pens_WL_runup, na.rm = TRUE), 
+            maxWTWL = max(WT_WL_runup, na.rm = TRUE)) %>%
+  mutate(maxOBWL = ifelse(is.infinite(maxOBWL), NA, maxOBWL), maxPensWL = ifelse(is.infinite(maxPensWL), NA, maxPensWL),
+         maxWTWL = ifelse(is.infinite(maxWTWL), NA, maxWTWL))
+
+dailyMaximums <- cbind(dailyMax_Tides, dailyMax_WaveHeight[,-1], dailyMax_WaveLength[,-1])
+dailyMaximums <- dailyMaximums[complete.cases(dailyMaximums),]
+
+```
+  
+Below is a custom function to calculate total water level based on Stockdon et al. (2006):  
+  
+```{r wave_runup_functions, echo = TRUE}
+
+USGSSetup <- function(B, H0, L0){
+  0.35*B*sqrt(H0*L0)
+}
+
+USGSSwash <- function(B, H0, L0){
+  sqrt(H0*L0*(0.563*(B^2) + 0.004))/2
+}
+
+USGSModel <- function(B, H0, L0){
+  round(1.1 * (USGSSetup(B, H0, L0) + USGSSwash(B, H0, L0)), 3)  # Stockdon et al. (2006) Generalized Eq. 19
+}
+
+totalWaterElevation <- function(B, H0, L0, Tide){
+  USGSModel(B, H0, L0) + Tide
+}
+
+TWL_DissipativeOnly <- function(H0, L0, Tide){
+  (0.043 * sqrt(H0 * L0)) + Tide # Stockdon et al. (2006) Dissipative-Only Eq. 18
+}
+
+```
+  
+where B = beach slope (radians), H0 = deep-water wave height (m), L0 = deep-water wavelength (m), and Ti = tide height (m NAVD88).  
+  
+Due to the large study area, the mapping of frequency of wave exposure was done in segments and the resulting rasters were stitched back together in ArcMap.
+  
+```{r wave_runup_mapping_subset_GeneralEq, warning = FALSE, message = FALSE, fig.width = 15, fig.height = 5, eval = FALSE}
+
+# Stockdon et al. (2006) generalized wave runup equation  
+ 
+rasterOptions(tmpdir = "D:/01_TempDir")
+
+Mean_Elev <- raster("R Shapefiles/Subset/wave_elev_sub.tif")
+Thiessen_Slopes <- raster("R Shapefiles/Subset/wave_slope_sub.tif")
+
+compareRaster(Mean_Elev, Thiessen_Slopes)
+
+
+Cols <- Mean_Elev@ncols; Rows <- Mean_Elev@nrows
+XMN <- Mean_Elev@extent@xmin; XMX <- Mean_Elev@extent@xmax; YMN <- Mean_Elev@extent@ymin; YMX <- Mean_Elev@extent@ymax
+
+r_ras <- raster(ncol = Cols, nrow = Rows, xmn = XMN, xmx = XMX, ymn = YMN, ymx = YMX)
+r_washCount <- raster(ncol = Cols, nrow = Rows, xmn = XMN, xmx = XMX, ymn = YMN, ymx = YMX)
+values(r_washCount) <- rep_len(0, ncell(r_washCount))
+
+reclassMat <- matrix(c(-Inf, 0, 0, 0, Inf, 1), ncol = 3, byrow = TRUE)
+
+Time <- Sys.time()
+for(i in 1:732){ # 732
+    r_ras <- totalWaterElevation(B = Thiessen_Slopes, H0 = dailyMaximums$maxWTHT[i], L0 = dailyMaximums$maxWTWL[i], 
+                                 Tide = dailyMaximums$maxApalTide[i])
+    
+    r_ras <- r_ras - Mean_Elev
+    r_ras <- reclassify(r_ras, reclassMat, right = TRUE)
+    
+    r_washCount <- r_washCount + r_ras # Running counter of wash-overs
+}
+
+
+par(family = "serif"); plot(r_washCount, xlim = c(XMN, XMX), ylim = c(YMN, YMX), col = topo.colors(50))
+writeRaster(r_washCount, filename = "R Shapefiles/Subset/Wash_Count_11.tif", format = "GTiff", overwrite = FALSE)
+
+r_washProp <- r_washCount / 732 # Proportion of time each cell was washed over
+
+par(family = "serif"); plot(r_washProp, xlim = c(XMN, XMX), ylim = c(YMN, YMX), col = topo.colors(50))
+writeRaster(r_washProp, filename = "R Shapefiles/Subset/Wash_Prop_11.tif", format = "GTiff", overwrite = FALSE)
+
+Sys.time() - Time
+
+```
+  
+```{r wave_runup_mapping_subset_DissipativeEq, warning = FALSE, message = FALSE, fig.width = 15, fig.height = 5, eval = FALSE}
+
+# Stockdon et al. (2006) dissipative-only wave runup equation  
+
+rasterOptions(tmpdir = "F:/01_TempDir")
+
+Mean_Elev <- raster("R Shapefiles/Subset/subset_elev.tif")
+
+
+Cols <- Mean_Elev@ncols; Rows <- Mean_Elev@nrows
+XMN <- Mean_Elev@extent@xmin; XMX <- Mean_Elev@extent@xmax; YMN <- Mean_Elev@extent@ymin; YMX <- Mean_Elev@extent@ymax
+
+r_ras <- raster(ncol = Cols, nrow = Rows, xmn = XMN, xmx = XMX, ymn = YMN, ymx = YMX)
+r_washCount <- raster(ncol = Cols, nrow = Rows, xmn = XMN, xmx = XMX, ymn = YMN, ymx = YMX)
+values(r_washCount) <- rep_len(0, ncell(r_washCount))
+
+reclassMat <- matrix(c(-Inf, 0, 0, 0, Inf, 1), ncol = 3, byrow = TRUE)
+
+Time <- Sys.time()
+for(i in 1:732){ # 732
+    r_ras <- TWL_DissipativeOnly(H0 = dailyMaximums$maxPensHT[i], L0 = dailyMaximums$maxPensWL[i], Tide = dailyMaximums$maxPCBTide[i])
+    
+    r_ras <- r_ras - Mean_Elev
+    r_ras <- reclassify(r_ras, reclassMat, right = TRUE)
+    
+    r_washCount <- r_washCount + r_ras # Running counter of wash-overs
+}
+
+
+par(family = "serif"); plot(r_washCount, xlim = c(XMN, XMX), ylim = c(YMN, YMX), col = topo.colors(50))
+writeRaster(r_washCount, filename = "R Shapefiles/Subset/Wash_Count_10.tif", format = "GTiff", overwrite = FALSE)
+
+r_washProp <- r_washCount / 732 # Proportion of time each cell was washed over
+
+par(family = "serif"); plot(r_washProp, xlim = c(XMN, XMX), ylim = c(YMN, YMX), col = topo.colors(50))
+writeRaster(r_washProp, filename = "R Shapefiles/Subset/Wash_Prop_10.tif", format = "GTiff", overwrite = FALSE)
+
+Sys.time() - Time
+
+```
+  
+The wave exposure under the most frequent wave and tide conditions were then mapped. Most wave conditions during the 2016-2019 nesting seasons fell between 0.5 m - 1.0 m (wave height) and 25.0 m - 50.0 m (wavelength) [Orange Beach: 19.2%, Pensacola: 23.7%, West Tampa: 24.3%]. Mean conditions at each buoy are listed below:  
+  
+* Orange Beach: wave height - 0.724 m, wavelength - 45.135 m  
+* Pensacola: wave height - 0.0.841 m, wavelength - 52.251 m  
+* West Tampa: wave height - 0.795 m, wavelength - 47.075 m  
+  
+Mean daily high tide conditions across the 4 tidal stations were within 5.4 cm of each other, as listed below:  
+  
+* Pensacola: 0.411 m NAVD88  
+* Panama City Beach: 0.412 m NAVD88  
+* Panama City: 0.358 m NAVD88  
+* Apalachicola: 0.376 m NAVD88  
+  
+Given the similarity across the respective wave and tide stations, the following values were used as "typical" wave and tide conditions:  
+  
+* Wave height: 0.790 m  
+* Wavelength: 48.0 m  
+* Tide height: 0.385 m NAVD88  
+  
+```{r wave_runup_mapping_typical_conditions, warning = FALSE, message = FALSE, fig.width = 15, fig.height = 5, eval = FALSE}
+
+rasterOptions(tmpdir = "D:/01_TempDir")
+
+Mean_Elev <- raster("Beach_Elevation.tif")
+Thiessen_Slopes <- raster("Beach_Slope.tif")
+
+compareRaster(Mean_Elev, Thiessen_Slopes)
+
+
+Cols <- Mean_Elev@ncols; Rows <- Mean_Elev@nrows
+XMN <- Mean_Elev@extent@xmin; XMX <- Mean_Elev@extent@xmax; YMN <- Mean_Elev@extent@ymin; YMX <- Mean_Elev@extent@ymax
+
+# Stockdon et al. (2006) generalized wave runup equation  
+
+r_ras <- raster(ncol = Cols, nrow = Rows, xmn = XMN, xmx = XMX, ymn = YMN, ymx = YMX)
+r_washCount <- raster(ncol = Cols, nrow = Rows, xmn = XMN, xmx = XMX, ymn = YMN, ymx = YMX)
+values(r_washCount) <- rep_len(0, ncell(r_washCount))
+
+reclassMat <- matrix(c(-Inf, 0, 0, 0, Inf, 1), ncol = 3, byrow = TRUE)
+
+
+r_ras <- totalWaterElevation(B = Thiessen_Slopes, H0 = 0.790, L0 = 48.0, Tide = 0.385)
+r_ras <- r_ras - Mean_Elev
+r_washCount <- reclassify(r_ras, reclassMat, right = TRUE)
+    
+par(family = "serif"); plot(r_washCount, xlim = c(XMN, XMX), ylim = c(YMN, YMX), col = topo.colors(50))
+writeRaster(r_washCount, filename = "R Shapefiles/Wash_Count_Typical_GeneralEq.tif", format = "GTiff", overwrite = FALSE)
+
+#----
+
+# Stockdon et al. (2006) dissipative-only wave runup equation  
+
+values(r_washCount) <- rep_len(0, ncell(r_washCount))
+
+r_ras <- TWL_DissipativeOnly(H0 = 0.790, L0 = 48.0, Tide = 0.385)
+r_ras <- r_ras - Mean_Elev
+r_washCount <- reclassify(r_ras, reclassMat, right = TRUE)
+    
+par(family = "serif"); plot(r_washCount, xlim = c(XMN, XMX), ylim = c(YMN, YMX), col = topo.colors(50))
+writeRaster(r_washCount, filename = "R Shapefiles/Wash_Count_Typical_DissipativeEq.tif", format = "GTiff", overwrite = FALSE)
+
+```
+  
+The wave exposure raster was converted to a polygon in ArcMap using all pixels which were exposed more than 5% of the time. This polygon was cleaned of holes and rough edges using the "Eliminate Polygon Part" tool (minimum area: 500 m) and "Smooth Polygon" tool (PAEK, 50 m simplification tolerance, 25 m minimum size), followed by manual cleaning. Intersecting the exposure polygon with the available nesting area polygon delineated the exposure polygon into the various beach monitoring units. The proportion of nesting area covered by the exposure polygon was compared per monitoring unit.  
+  
+## Beach Ranking  
+  
+To rank the monitoring units by nesting density and wave exposure:  
+* The mean number of nests per year per monitoring unit was calculated. To be included, a nest had to have a valid GPS coordinate falling within the available nesting area polygon of it's specific nesting beach.  
+* The nesting counts were rescaled from 0 to 1, with 1 indicating the most populated beach  
+* The proportion of nests falling within the modeled wave exposure polygon per monitoring unit was calculated  
+* The proportion of impacted nests was rescaled from 0 to 1, with 1 indicating the highest proportion of exposed nesting  
+* The rescaled nesting counts and proportion of impacted nests were multiplied together and ranked from highest to lowest  
+* Monitoring units with resulting scores in the 75th percentile or higher were deemed "Very High Impact", 50th to 75th percentile were "High Impact", 25th to 50th percentile were "Moderate Impact", and the 25th percentile or less were "Low Impact"  
+  
+```{r loggerhead_beach_ranking}
+
+nestingData <- st_read(dsn = "R Shapefiles/Panhandle_Nesting.shp", quiet = TRUE)
+loggerheads <- nestingData %>%
+  filter(Species == "Cc")
+
+
+nestingBeaches <- st_read(dsn = "R Shapefiles/Maximum_Nesting_Polygon_Subdivided.shp", quiet = TRUE)
+
+nestingArea <- data.frame(cbind("Name" = nestingBeaches$Name, "Available Area" = nestingBeaches$SHAPE_Area))
+colnames(nestingArea) <- c("Name", "Available Area")
+nestingArea$'Available Area' <- as.numeric(nestingArea$'Available Area')
+nestingArea$'Available Area' <- round(nestingArea$'Available Area' / 1000000, 2) # Convert area from m2 to km2
+nestingArea <- nestingArea[order(nestingArea$Name),]
+
+
+nestCounts <- aggregate(loggerheads$OBJECTID, list(loggerheads$Beach_Name, loggerheads$Year_), length)
+nestCounts <- aggregate(nestCounts$x, list(nestCounts$Group.1), mean)
+nestCounts$x <- round(nestCounts$x, 2)
+nestCounts <- nestCounts[order(nestCounts$Group.1),]
+colnames(nestCounts) <- c("Name", "Mean Nest Count")
+
+
+nestDensity <- merge(nestingArea, nestCounts, by = "Name")
+nestDensity$'Nest Density' <- round(nestDensity$`Mean Nest Count` / nestDensity$'Available Area', 2)
+
+countQuantiles <- quantile(nestDensity$`Mean Nest Count`, probs = c(0.25, 0.50, 0.75))
+
+verbalCount <- NULL
+for(i in 1:length(nestDensity$Name)){
+  if(nestDensity$`Mean Nest Count`[i] > countQuantiles[3]){
+    verbalCount[i] <- "Very High"
+  } else if(nestDensity$`Mean Nest Count`[i] > countQuantiles[2] & nestDensity$`Mean Nest Count`[i] <= countQuantiles[3]){
+    verbalCount[i] <- "High"
+  } else if(nestDensity$`Mean Nest Count`[i] > countQuantiles[1] & nestDensity$`Mean Nest Count`[i] <= countQuantiles[2]){
+    verbalCount[i] <- "Moderate"
+  } else {
+    verbalCount[i] <- "Low"
+  }
+}
+
+nestDensity <- cbind(nestDensity, "Count Category" = verbalCount)
+
+#----
+
+exposedBeaches <- st_read(dsn = "R Shapefiles/Exposure_Polygon.shp", quiet = TRUE)
+
+exposedArea <- data.frame(cbind("Name" = exposedBeaches$Name, "Exposed Area" = exposedBeaches$Shape_Area))
+exposedArea$Exposed.Area <- as.numeric(exposedArea$Exposed.Area)
+exposedArea$Exposed.Area <- round(exposedArea$Exposed.Area / 1000000, 2) # Convert area from m2 to km2
+exposedArea <- exposedArea[order(exposedArea$Name),]
+
+nestDensity <- merge(nestDensity, exposedArea, by = "Name")
+
+nestDensity$'Proportion Area Exposed' <- round(nestDensity$Exposed.Area / nestDensity$`Available Area`, 3)
+
+
+nestingData_Exposed <- st_read(dsn = "R Shapefiles/Panhandle_Nesting_Exposed.shp", quiet = TRUE)
+loggerheads_Exposed <- nestingData_Exposed %>%
+  filter(Species == "Cc")
+
+nestCounts_Exposed <- aggregate(loggerheads_Exposed$OBJECTID, list(loggerheads_Exposed$Beach_Name), length)
+nestCounts_Total <- aggregate(loggerheads$OBJECTID, list(loggerheads$Beach_Name), length)
+nestCounts_Exposed <- merge(nestCounts_Exposed, nestCounts_Total, by = "Group.1")
+nestCounts_Exposed <- nestCounts_Exposed[order(nestCounts_Exposed$Group.1),]
+nestCounts_Exposed <- rbind(data.frame("Group.1" = "Bald Point State Park", "x.x" = 0, "x.y" = 6), nestCounts_Exposed)
+colnames(nestCounts_Exposed) <- c("Name", "N Nests Exposed", "N Nests Total")
+
+nestCounts_Exposed$'Proportion Nesting Exposed' <- round(nestCounts_Exposed$`N Nests Exposed` / nestCounts_Exposed$`N Nests Total`, 3)
+
+nestDensity <- cbind(nestDensity, "Proportion Nesting Exposed" = nestCounts_Exposed$`Proportion Nesting Exposed`)
+
+exposureQuantiles <- quantile(nestDensity$`Proportion Nesting Exposed`, probs = c(0.25, 0.50, 0.75))
+
+verbalExposure <- NULL
+for(i in 1:length(nestDensity$Name)){
+  if(nestDensity$`Proportion Nesting Exposed`[i] > exposureQuantiles[3]){
+    verbalExposure[i] <- "Very High"
+  } else if(nestDensity$`Proportion Nesting Exposed`[i] > exposureQuantiles[2] & nestDensity$`Proportion Nesting Exposed`[i] <= exposureQuantiles[3]){
+    verbalExposure[i] <- "High"
+  } else if(nestDensity$`Proportion Nesting Exposed`[i] > exposureQuantiles[1] & nestDensity$`Proportion Nesting Exposed`[i] <= exposureQuantiles[2]){
+    verbalExposure[i] <- "Moderate"
+  } else {
+    verbalExposure[i] <- "Low"
+  }
+}
+
+nestDensity <- cbind(nestDensity, "Exposure Category" = verbalExposure)
+
+#----
+
+nestDensity$Ranking <- round(nestDensity$`Mean Nest Count` * nestDensity$`Proportion Nesting Exposed`, 2)
+nestDensity <- nestDensity[order(-nestDensity$Ranking),]
+
+rankingQuantiles <- quantile(nestDensity$Ranking, probs = c(0.25, 0.50, 0.75))
+
+verbalRanking <- NULL
+for(i in 1:length(nestDensity$Name)){
+  if(nestDensity$Ranking[i] > rankingQuantiles[3]){
+    verbalRanking[i] <- "Very High"
+  } else if(nestDensity$Ranking[i] > rankingQuantiles[2] & nestDensity$Ranking[i] <= rankingQuantiles[3]){
+    verbalRanking[i] <- "High"
+  } else if(nestDensity$Ranking[i] > rankingQuantiles[1] & nestDensity$Ranking[i] <= rankingQuantiles[2]){
+    verbalRanking[i] <- "Moderate"
+  } else {
+    verbalRanking[i] <- "Low"
+  }
+}
+
+nestDensity <- cbind(nestDensity, "Score Priority" = verbalRanking)
+
+colnames(nestDensity) <- c("Beach Name", "Available Area (km^2^)", "Mean Nest Count (n yr^-1^)", "Mean Nest Density (n km^-2^ yr^-1^)", 
+                           "Nest Count Category", "Area Exposed (km^2^)", "Proportion Area Exposed", "Proportion Nesting Exposed", "Exposure Category", 
+                           "Mean Nests At Risk (n yr^-1^)", "Risk Category")
+
+kable(nestDensity)
+
+#write.csv(nestDensity, "NestingBeach_Rankings.csv")
+
+```
+  
+***  
+***  
+  
+## Additional Nest Analyses  
+  
+Despite the significant areal extent of wave exposure (i.e., 95% of daily total water level maxima), most nests exhibit a low probability of wave exposure. This indicates that most nests are only exposed to wave inundation during cyclonic storms or other periods of increased wave activity.  
+  
+```{r mean_exposure}
+
+nestData_WaveRunup <- read.csv("Panhandle Nesting Data 2016-2019 For Analysis.csv", header = TRUE)
+nestData_WaveRunup$Nest.Date <- as.POSIXct(nestData_WaveRunup$Nest.Date, format = "%m/%d/%Y")
+nestData_WaveRunup$Emerge.Date <- as.POSIXct(nestData_WaveRunup$Emerge.Date, format = "%m/%d/%Y")
+nestData_WaveRunup$Date.Inventoried <- as.POSIXct(nestData_WaveRunup$Date.Inventoried, format = "%m/%d/%Y")
+nestData_WaveRunup$Start <- as.POSIXct(nestData_WaveRunup$Start, format = "%m/%d/%Y")
+nestData_WaveRunup$End <- as.POSIXct(nestData_WaveRunup$End, format = "%m/%d/%Y")
+
+loggerheadWaveRunup <- nestData_WaveRunup %>%
+  filter(Species == "Cc")
+
+paste0("Mean wave exposure for all nest GPS locations: ", round(mean(loggerheadWaveRunup$Wave.Exposure.Proportion..Dis.Eq.), 3), " (+/- ",
+       round(sd(loggerheadWaveRunup$Wave.Exposure.Proportion..Dis.Eq.), 3), ", n = ", length(loggerheadWaveRunup$Species), ")")
+
+```
+  
+Nests with reported wave exposure had significantly higher modeled probabilities of wave exposure compared to those without reported wave wash-over.  
+  
+```{r washover_comparison}
+
+loggerheadNestsWashedOver <- loggerheadWaveRunup %>% # n = 6773
+  filter(Initial.Treatment == "A" | Initial.Treatment == "B" | Initial.Treatment == "C" | Initial.Treatment == "D") %>% # n = 6363
+  filter(Final.Treatment == "A" | Final.Treatment == "B" | Final.Treatment == "C" | Final.Treatment == "D") %>% # n = 6355
+  filter(!is.na(Washed.Over)) # n = 6355
+
+paste0("Mean wave exposure for washed over nest GPS locations: ", 
+       round(mean(loggerheadNestsWashedOver[loggerheadNestsWashedOver$Washed.Over == "Yes",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       " (+/- ",
+       round(sd(loggerheadNestsWashedOver[loggerheadNestsWashedOver$Washed.Over == "Yes",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       ", n = ", length(loggerheadNestsWashedOver[loggerheadNestsWashedOver$Washed.Over == "Yes",]$Species), ")")
+
+paste0("Mean wave exposure for non-washed over nest GPS locations: ", 
+       round(mean(loggerheadNestsWashedOver[loggerheadNestsWashedOver$Washed.Over == "No",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       " (+/- ",
+       round(sd(loggerheadNestsWashedOver[loggerheadNestsWashedOver$Washed.Over == "No",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       ", n = ", length(loggerheadNestsWashedOver[loggerheadNestsWashedOver$Washed.Over == "No",]$Species), ")")
+
+summary(lm(Wave.Exposure.Proportion..Dis.Eq. ~ Washed.Over, data = loggerheadNestsWashedOver))
+
+```
+  
+Nests with reported partial or complete erosion had still higher modeled probabilities of wave exposure. Interestingly, nests with complete wash-out had lower probabilities of wave exposure than nests which experienced only a partial wash-out.  
+  
+```{r washout_comparison}
+
+loggerheadNestsWashedOut <- loggerheadNestsWashedOver %>% # n = 6355
+  filter(!is.na(Partial.Wash.Out)) %>% # n = 6355
+  filter(!is.na(Complete.Wash.Out)) # n = 6355
+
+paste0("Mean wave exposure for partially washed out nest GPS locations: ", 
+       round(mean(loggerheadNestsWashedOut[loggerheadNestsWashedOut$Partial.Wash.Out == "Yes",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       " (+/- ",
+       round(sd(loggerheadNestsWashedOut[loggerheadNestsWashedOut$Partial.Wash.Out == "Yes",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       ", n = ", length(loggerheadNestsWashedOut[loggerheadNestsWashedOut$Partial.Wash.Out == "Yes",]$Species), ")")
+
+paste0("Mean wave exposure for completely washed out nest GPS locations: ", 
+       round(mean(loggerheadNestsWashedOut[loggerheadNestsWashedOut$Complete.Wash.Out == "Yes",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       " (+/- ",
+       round(sd(loggerheadNestsWashedOut[loggerheadNestsWashedOut$Complete.Wash.Out == "Yes",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       ", n = ", length(loggerheadNestsWashedOut[loggerheadNestsWashedOut$Complete.Wash.Out == "Yes",]$Species), ")")
+
+partialWashOut <- loggerheadNestsWashedOut[loggerheadNestsWashedOut$Partial.Wash.Out == "Yes",]$Wave.Exposure.Proportion..Dis.Eq.
+completeWashOut <- loggerheadNestsWashedOut[loggerheadNestsWashedOut$Complete.Wash.Out == "Yes",]$Wave.Exposure.Proportion..Dis.Eq.
+
+
+```
+  
+### Difference between Generalized and Dissipative Equations for the proportion of wave exposure  
+  
+Switching from the generalized to dissipative formulation for wave runup presented in Stockdon et al. (2006) resulted in a:  
+  
+* 0.039 km^2^ average decline in exposed nesting area (0.480 vs 0.441 km^2^)  
+* 6.5% average decline (absolute, 11.4% relative) in the proportion of exposed nesting area (56.9% vs 50.4%)  
+* 14.6% average decline (absolute, 29.9% relative) in the proportion of exposed nest GPS locations (48.8% vs 34.2%)  
+* 5.9 fewer average nests at risk (21.5 vs 15.6)  
+  
+***  
+***  
+  
+## Hourly Wave Exposure Assessment  
+  
+To assess model accuracy, the exposure history of a subset of nests using conditions observed during their respective incubation periods were modeled. Nests were included in the subset if: 1) the nest had a known date of deposition, 2) had reported presence or absence of wave wash-over during the incubation, 3) had accurate GPS coordinates, 4) was left *in situ*, and 5) had an incubation duration between 30 and 90 days. This resulted in a sample size of 6491 nests across all species. The cross-shore beach slope was calculated at each nest GPS location and the wave and tide data were extracted between each nest's lay date and emerge or excavation date, whichever was earlier and available. If a lay date was available but an emergence or excavation date were not, then 75 days from the lay date was used as the end point.  
+  
+### Model 1 - Slope: Mean High Water to Dune Toe, Runup Equation: General  
+  
+```{r hourly_wave_exposure_MHWtoDuneToe_General_1}
+
+nestData_WaveRunup <- read.csv("Panhandle Nesting Data 2016-2019 For Analysis.csv", header = TRUE)
+nestData_WaveRunup$Nest.Date <- as.POSIXct(nestData_WaveRunup$Nest.Date, format = "%m/%d/%Y")
+nestData_WaveRunup$Emerge.Date <- as.POSIXct(nestData_WaveRunup$Emerge.Date, format = "%m/%d/%Y")
+nestData_WaveRunup$Date.Inventoried <- as.POSIXct(nestData_WaveRunup$Date.Inventoried, format = "%m/%d/%Y")
+nestData_WaveRunup$Start <- as.POSIXct(nestData_WaveRunup$Start, format = "%m/%d/%Y")
+nestData_WaveRunup$End <- as.POSIXct(nestData_WaveRunup$End, format = "%m/%d/%Y")
+
+buoysHourly_2 <- read.csv("Buoy Data - Wave Runup Hourly 2.csv", header = TRUE)
+buoysHourly_2$Date <- as.POSIXct(buoysHourly_2$Date, format = "%m/%d/%Y")
+buoysHourly_2$Date.Time..GMT. <- as.POSIXct(buoysHourly_2$Date.Time..GMT., format = "%m/%d/%Y %H:%M")
+
+
+nestData_WaveRunup <- nestData_WaveRunup %>% # n = 7040
+  filter(!is.na(Start)) %>% # n = 6976
+  filter(!is.na(Washed.Over)) %>% # n = 6976
+  filter(Initial.Treatment == "A" | Initial.Treatment == "B" | Initial.Treatment == "C" | Initial.Treatment == "D") %>% # n = 6562
+  filter(Final.Treatment == "A" | Final.Treatment == "B" | Final.Treatment == "C" | Final.Treatment == "D") %>% # n = 6553
+  filter(Duration > 30 & Duration <= 90) # n = 6491
+
+
+
+Waves <- NULL
+Tides <- NULL
+oceanData <- NULL
+Runup <- NULL
+washOver_MHWtoDuneToe_General <- NULL
+nestWashOver_MHWtoDuneToe_General <- NULL
+
+for(i in 1:length(nestData_WaveRunup$Unique.ID)){ 
+  if(nestData_WaveRunup$Buoy[i] == "West Tampa"){
+    Waves <- data.frame(cbind("Date_Time" = buoysHourly_2$Date.Time..GMT., "Wave_Height" = buoysHourly_2$WT_HT_runup, 
+                              "Wavelength" = buoysHourly_2$WT_WL_runup))
+  } else if(nestData_WaveRunup$Buoy[i] == "Pensacola"){
+    Waves <- data.frame(cbind("Date_Time" = buoysHourly_2$Date.Time..GMT., "Wave_Height" = buoysHourly_2$Pens_HT_runup, 
+                              "Wavelength" = buoysHourly_2$Pens_WL_runup))
+  } else {
+    Waves <- data.frame(cbind("Date_Time" = buoysHourly_2$Date.Time..GMT., "Wave_Height" = buoysHourly_2$OB_HT_runup, 
+                              "Wavelength" = buoysHourly_2$OB_WL_runup))
+  }
+  
+  Waves$Date_Time <- as.POSIXct(Waves$Date_Time, origin = "1970-01-01 00:00.00 UTC")
+
+  if(nestData_WaveRunup$Tide[i] == "Apalachicola"){
+    Tides <- data.frame(cbind("Date_Time" = tidesHourly$Date.Time..GMT., "Tide_Height" = tidesHourly$Apalachicola))
+  } else if(nestData_WaveRunup$Tide[i] == "Panama City"){
+    Tides <- data.frame(cbind("Date_Time" = tidesHourly$Date.Time..GMT., "Tide_Height" = tidesHourly$Panama.City))
+  } else if(nestData_WaveRunup$Tide[i] == "Panama City Beach"){
+    Tides <- data.frame(cbind("Date_Time" = tidesHourly$Date.Time..GMT., "Tide_Height" = tidesHourly$Panama.City.Beach))
+  } else {
+    Tides <- data.frame(cbind("Date_Time" = tidesHourly$Date.Time..GMT., "Tide_Height" = tidesHourly$Pensacola))
+  }
+
+  Tides$Date_Time <- as.POSIXct(Tides$Date_Time, origin = "1970-01-01 00:00.00 UTC")
+
+  oceanData <- cbind(Waves, "Tide_Height" = Tides$Tide_Height)
+  oceanData <- oceanData %>% 
+    filter(Date_Time >= nestData_WaveRunup$Start[i]) %>%
+    filter(Date_Time <= nestData_WaveRunup$End[i])
+
+  for(j in 1:length(oceanData$Date_Time)){
+    Runup[j] <- totalWaterElevation(B = nestData_WaveRunup$MHWtoDuneToe_Radians[i], H0 = oceanData$Wave_Height[j], 
+                                    L0 = oceanData$Wavelength[j], Tide = oceanData$Tide_Height[j])
+  }
+  
+  for(k in 1:length(Runup)){
+    if(is.na(Runup[k])){
+      washOver_MHWtoDuneToe_General[k] <- NA
+    } else if(Runup[k] >= nestData_WaveRunup$Elevation[i]){
+      washOver_MHWtoDuneToe_General[k] <- 1
+    } else {
+      washOver_MHWtoDuneToe_General[k] <- 0
+    }
+  }
+  
+  nestWashOver_MHWtoDuneToe_General[[i]] <- washOver_MHWtoDuneToe_General
+  
+  Waves <- NULL
+  Tides <- NULL
+  oceanData <- NULL
+  Runup <- NULL
+  washOver_MHWtoDuneToe_General <- NULL
+  
+}
+
+names(nestWashOver_MHWtoDuneToe_General) <- nestData_WaveRunup$Unique.ID
+
+```
+  
+The model performed sufficiently with an overall accuracy of 86.8%. False positives (i.e., modeled wash-over when no wash-over was observed *in situ*) were common (43.2%). As wave wash-over is not routinely reported at all beach monitoring units, this may inflate the false positive rate. However, this is unlikely to be responsible for all, or most, of the false positives. Chi-squared analyses indicate a statistically significant relationship between modeled and observed wave wash-over (p << 0.001).  
+  
+```{r hourly_wave_exposure_MHWtoDuneToe_General_2}
+
+propMissing_MHWtoDuneToe_General <- NULL
+
+for(i in 1:length(nestData_WaveRunup$Unique.ID)){
+  propMissing_MHWtoDuneToe_General[i] <- round(sum(is.na(nestWashOver_MHWtoDuneToe_General[[i]])) / 
+                                                 length(nestWashOver_MHWtoDuneToe_General[[i]]), 3)
+}
+
+duration_MHWtoDuneToe_General <- NULL
+
+for(i in 1:length(nestData_WaveRunup$Unique.ID)){
+  if(propMissing_MHWtoDuneToe_General[i] == 1){
+    duration_MHWtoDuneToe_General[i] <- NA
+  } else {
+    duration_MHWtoDuneToe_General[i] <- sum(nestWashOver_MHWtoDuneToe_General[[i]], na.rm = TRUE)
+  }
+}
+
+washedOver_MHWtoDuneToe_General <- NULL
+
+for(i in 1:length(duration_MHWtoDuneToe_General)){
+  if(is.na(duration_MHWtoDuneToe_General[i])){
+    washedOver_MHWtoDuneToe_General[i] <- NA
+  } else if(duration_MHWtoDuneToe_General[i] > 0){
+    washedOver_MHWtoDuneToe_General[i] <- "Yes"
+  } else {
+    washedOver_MHWtoDuneToe_General[i] <- "No"
+  }
+}
+
+washCount_MHWtoDuneToe_General <- NULL
+
+for(i in 1: length(nestData_WaveRunup$Unique.ID)){
+  if(is.na(duration_MHWtoDuneToe_General[i])){
+    washCount_MHWtoDuneToe_General[i] <- NA
+  } else {
+    washCount_MHWtoDuneToe_General[i] <- str_count(paste(nestWashOver_MHWtoDuneToe_General[[i]], collapse = ""), "0000001") 
+    # 6 hours between wash-over events
+  }
+} 
+
+
+nestData_WaveRunup <- cbind(nestData_WaveRunup, "Model Wash-Over (MHW_DT_Gen)" = washedOver_MHWtoDuneToe_General, 
+                            "Count (MHW_DT_Gen)" = washCount_MHWtoDuneToe_General, "Total Duration (MHW_DT_Gen)" = 
+                              duration_MHWtoDuneToe_General)
+
+
+
+washOverTable_MHWtoDuneToe_General <- table(nestData_WaveRunup$Washed.Over, nestData_WaveRunup$`Model Wash-Over (MHW_DT_Gen)`, 
+                                            dnn = c("Observed Wash-Over", "Modeled Wash-Over"))
+
+washOverTable_MHWtoDuneToe_General
+paste0("Correct: ", round((washOverTable_MHWtoDuneToe_General[1,1] + washOverTable_MHWtoDuneToe_General[2,2])/4756, 3))
+paste0("False Positive: ", 
+       round(washOverTable_MHWtoDuneToe_General[1,2]/(washOverTable_MHWtoDuneToe_General[1,1] + washOverTable_MHWtoDuneToe_General[1,2]), 3))
+paste0("False Negative: ", 
+       round(washOverTable_MHWtoDuneToe_General[2,1]/(washOverTable_MHWtoDuneToe_General[2,1] + washOverTable_MHWtoDuneToe_General[2,2]), 3))
+
+chisq.test(nestData_WaveRunup$Washed.Over, nestData_WaveRunup$`Model Wash-Over (MHW_DT_Gen)`)
+
+```
+  
+  
+### Model 2 - Slope: None, Runup Equation: Dissipative  
+  
+```{r hourly_wave_exposure_MHWtoDuneToe_Dissipative_1}
+
+Waves <- NULL
+Tides <- NULL
+oceanData <- NULL
+Runup <- NULL
+washOver_MHWtoDuneToe_Dissipative <- NULL
+nestWashOver_MHWtoDuneToe_Dissipative <- NULL
+
+for(i in 1:length(nestData_WaveRunup$Unique.ID)){ 
+  if(nestData_WaveRunup$Buoy[i] == "West Tampa"){
+    Waves <- data.frame(cbind("Date_Time" = buoysHourly_2$Date.Time..GMT., "Wave_Height" = buoysHourly_2$WT_HT_runup, 
+                              "Wavelength" = buoysHourly_2$WT_WL_runup))
+  } else if(nestData_WaveRunup$Buoy[i] == "Pensacola"){
+    Waves <- data.frame(cbind("Date_Time" = buoysHourly_2$Date.Time..GMT., "Wave_Height" = buoysHourly_2$Pens_HT_runup, 
+                              "Wavelength" = buoysHourly_2$Pens_WL_runup))
+  } else {
+    Waves <- data.frame(cbind("Date_Time" = buoysHourly_2$Date.Time..GMT., "Wave_Height" = buoysHourly_2$OB_HT_runup, 
+                              "Wavelength" = buoysHourly_2$OB_WL_runup))
+  }
+  
+  Waves$Date_Time <- as.POSIXct(Waves$Date_Time, origin = "1970-01-01 00:00.00 UTC")
+
+  if(nestData_WaveRunup$Tide[i] == "Apalachicola"){
+    Tides <- data.frame(cbind("Date_Time" = tidesHourly$Date.Time..GMT., "Tide_Height" = tidesHourly$Apalachicola))
+  } else if(nestData_WaveRunup$Tide[i] == "Panama City"){
+    Tides <- data.frame(cbind("Date_Time" = tidesHourly$Date.Time..GMT., "Tide_Height" = tidesHourly$Panama.City))
+  } else if(nestData_WaveRunup$Tide[i] == "Panama City Beach"){
+    Tides <- data.frame(cbind("Date_Time" = tidesHourly$Date.Time..GMT., "Tide_Height" = tidesHourly$Panama.City.Beach))
+  } else {
+    Tides <- data.frame(cbind("Date_Time" = tidesHourly$Date.Time..GMT., "Tide_Height" = tidesHourly$Pensacola))
+  }
+
+  Tides$Date_Time <- as.POSIXct(Tides$Date_Time, origin = "1970-01-01 00:00.00 UTC")
+
+  oceanData <- cbind(Waves, "Tide_Height" = Tides$Tide_Height)
+  oceanData <- oceanData %>% 
+    filter(Date_Time >= nestData_WaveRunup$Start[i]) %>%
+    filter(Date_Time <= nestData_WaveRunup$End[i])
+
+  for(j in 1:length(oceanData$Date_Time)){
+    Runup[j] <- TWL_DissipativeOnly(H0 = oceanData$Wave_Height[j], L0 = oceanData$Wavelength[j], Tide = oceanData$Tide_Height[j])
+  }
+  
+  for(k in 1:length(Runup)){
+    if(is.na(Runup[k])){
+      washOver_MHWtoDuneToe_Dissipative[k] <- NA
+    } else if(Runup[k] >= nestData_WaveRunup$Elevation[i]){
+      washOver_MHWtoDuneToe_Dissipative[k] <- 1
+    } else {
+      washOver_MHWtoDuneToe_Dissipative[k] <- 0
+    }
+  }
+  
+  nestWashOver_MHWtoDuneToe_Dissipative[[i]] <- washOver_MHWtoDuneToe_Dissipative
+  
+  Waves <- NULL
+  Tides <- NULL
+  oceanData <- NULL
+  Runup <- NULL
+  washOver_MHWtoDuneToe_Dissipative <- NULL
+  
+}
+
+names(nestWashOver_MHWtoDuneToe_Dissipative) <- nestData_WaveRunup$Unique.ID
+
+```
+  
+The model performed sufficiently with an overall accuracy of 89.2% (an improvement on the 86.8% returned by the General equation). False positives were still common (33.0%) but less than the General equation (43.2%). Chi-squared analyses indicate a statistically significant relationship between modeled and observed wave wash-over (p << 0.001).  
+  
+```{r hourly_wave_exposure_MHWtoDuneToe_Dissipative_2}
+
+propMissing_MHWtoDuneToe_Dissipative <- NULL
+
+for(i in 1:length(nestData_WaveRunup$Unique.ID)){
+  propMissing_MHWtoDuneToe_Dissipative[i] <- round(sum(is.na(nestWashOver_MHWtoDuneToe_Dissipative[[i]])) / 
+                                                     length(nestWashOver_MHWtoDuneToe_Dissipative[[i]]), 3)
+}
+
+duration_MHWtoDuneToe_Dissipative <- NULL
+
+for(i in 1:length(nestData_WaveRunup$Unique.ID)){
+  if(propMissing_MHWtoDuneToe_Dissipative[i] == 1){
+    duration_MHWtoDuneToe_Dissipative[i] <- NA
+  } else {
+    duration_MHWtoDuneToe_Dissipative[i] <- sum(nestWashOver_MHWtoDuneToe_Dissipative[[i]], na.rm = TRUE)
+  }
+}
+
+washedOver_MHWtoDuneToe_Dissipative <- NULL
+
+for(i in 1:length(duration_MHWtoDuneToe_Dissipative)){
+  if(is.na(duration_MHWtoDuneToe_Dissipative[i])){
+    washedOver_MHWtoDuneToe_Dissipative[i] <- NA
+  } else if(duration_MHWtoDuneToe_Dissipative[i] > 0){
+    washedOver_MHWtoDuneToe_Dissipative[i] <- "Yes"
+  } else {
+    washedOver_MHWtoDuneToe_Dissipative[i] <- "No"
+  }
+}
+
+washCount_MHWtoDuneToe_Dissipative <- NULL
+
+for(i in 1: length(nestData_WaveRunup$Unique.ID)){
+  if(is.na(duration_MHWtoDuneToe_Dissipative[i])){
+    washCount_MHWtoDuneToe_Dissipative[i] <- NA
+  } else {
+    washCount_MHWtoDuneToe_Dissipative[i] <- str_count(paste(nestWashOver_MHWtoDuneToe_Dissipative[[i]], collapse = ""), "0000001") 
+    # 6 hours between wash-over events
+  }
+} 
+
+
+nestData_WaveRunup <- cbind(nestData_WaveRunup, "Model Wash-Over (MHW_DT_Dis)" = washedOver_MHWtoDuneToe_Dissipative, 
+                            "Count (MHW_DT_Dis)" = washCount_MHWtoDuneToe_Dissipative, "Total Duration (MHW_DT_Dis)" = 
+                              duration_MHWtoDuneToe_Dissipative)
+
+
+
+washOverTable_MHWtoDuneToe_Dissipative <- table(nestData_WaveRunup$Washed.Over, nestData_WaveRunup$`Model Wash-Over (MHW_DT_Dis)`, 
+                                            dnn = c("Observed Wash-Over", "Modeled Wash-Over"))
+
+washOverTable_MHWtoDuneToe_Dissipative
+paste0("Correct: ", round((washOverTable_MHWtoDuneToe_Dissipative[1,1] + washOverTable_MHWtoDuneToe_Dissipative[2,2])/4756, 3))
+paste0("False Positive: ", 
+       round(washOverTable_MHWtoDuneToe_Dissipative[1,2]/
+               (washOverTable_MHWtoDuneToe_Dissipative[1,1] + washOverTable_MHWtoDuneToe_Dissipative[1,2]), 3))
+paste0("False Negative: ", 
+       round(washOverTable_MHWtoDuneToe_Dissipative[2,1]/(washOverTable_MHWtoDuneToe_Dissipative[2,1] + 
+                                                            washOverTable_MHWtoDuneToe_Dissipative[2,2]), 3))
+
+chisq.test(nestData_WaveRunup$Washed.Over, nestData_WaveRunup$`Model Wash-Over (MHW_DT_Dis)`)
+
+```
+  
+***  
+***  
+  
+## Notes  
+  
+*Modeled wave wash-over frequency and duration are currently unrealistically long, particularly when compared to nest productivity metrics at these long-exposure nests. This is also evident given the high false positive rates in the 4 models. Further work is needed before such an approach can be used to model these variables (e.g., wave exposure frequency, duration) critical to sea turtle embryonic tolerance to wave exposure and inundation.*  
+  
+  
+  
+  
+  

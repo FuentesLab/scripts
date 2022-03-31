@@ -1,0 +1,504 @@
+---
+title: "Panhandle Tide Data Processing"
+author: "Matt Ware"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+  
+## Background  
+  
+This R Markdown documents the preparation of the observed tide data recorded along the Florida Panhandle. The available record from 4 stations were downloaded from NOAA Tides and Currents (https://tidesandcurrents.noaa.gov/stations.html#Florida):  
+  
+* Pensacola - #8729840, Diurnal tide, Duration: 1 January 1998 to 31 December 2019, Location: 30.40333, -87.21167  
+* Panama City Beach - #8729210, Diurnal tide, Duration: 1 January 1998 to 31 December 2019, Location: 30.21333, -85.87833  
+* Panama City - #8729108, Diurnal tide, Duration: 1 April 1998 to 31 December 2019, Location: 30.15167, -85.70000  
+* Apalachicola - #8728690, Mixed tide, Duration: 1 January 1998 to 31 December 2019, Location: 29.72500, -84.98000  
+  
+The text files were brought into Excel for cleaning. Date-Time gaps were filled in with empty cells in order to create a continuous time-series. Cells with error flags (i.e., 99, 999, 9999, as appropriate) were replaced with empty cells so as not to interfere with later analyses. The final cleaned Excel files were then brought into R for further analysis.  
+  
+  
+This analysis uses the following libraries:  
+  
+```{r libraries, message = FALSE, warning = FALSE, echo = TRUE}
+
+library(dplyr)
+library(knitr)
+library(plotrix)
+
+```
+```{r version}
+
+paste0("This RMarkdown and the included analyses were built using ", R.Version()$version.string)
+
+```
+  
+```{r data_import}
+
+tideData <- read.csv("Tide Data - Aligned and Subsetted.csv", header = TRUE)
+
+tideData$Date.Time..GMT. <- as.POSIXct(tideData$Date.Time..GMT., format = "%m/%d/%Y %H:%M")
+
+```
+  
+## All Available Hourly Data  
+  
+Below is a visualization of the available hourly tide data from the 4 stations. Note there are several small gaps within the various stations in addition to 1 large gap at the Panama City Beach station. Mean sea level for the various stations is ~0.10-0.15 m above the baseline for the NAVD88 vertical datum.  
+  
+```{r visualization_all_1, fig.width = 12, fig.height = 12}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(4, 1))
+plot(tideData$Date.Time..GMT., tideData$Pensacola, xlab = "Date", ylim = c(-0.75, 2.5), ylab = "Tide Height (m NAVD88)", type = "l", lwd = 1, 
+     cex.axis = 1.2, cex.lab = 1.3, main = "Pensacola #8729840")
+plot(tideData$Date.Time..GMT., tideData$Panama.City.Beach, xlab = "Date", ylim = c(-0.75, 2.5), ylab = "Tide Height (m NAVD88)", type = "l", 
+     lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Panama City Beach #8729210")
+plot(tideData$Date.Time..GMT., tideData$Panama.City, xlab = "Date", ylim = c(-0.75, 2.5), ylab = "Tide Height (m NAVD88)", type = "l", 
+     lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Panama City #8729108")
+plot(tideData$Date.Time..GMT., tideData$Apalachicola, xlab = "Date", ylim = c(-0.75, 2.5), ylab = "Tide Height (m NAVD88)", type = "l", 
+     lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Apalachicola #8728690")
+
+```
+  
+```{r visualization_all_2, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(density(tideData$Pensacola, na.rm = TRUE), ylim = c(0, 2.0), xlab = "Tide Height (m NAVD88))", xlim = c(-0.75, 2.5), lwd = 2, 
+     cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Tide Height Distribution")
+par(new = TRUE)
+plot(density(tideData$Panama.City.Beach, na.rm = TRUE), ylim = c(0, 2.0), xlab = "", xlim = c(-0.75, 2.5), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(density(tideData$Panama.City, na.rm = TRUE), ylim = c(0, 2.0), xlab = "", xlim = c(-0.75, 2.5), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "blue", main = "")
+par(new = TRUE)
+plot(density(tideData$Apalachicola, na.rm = TRUE), ylim = c(0, 2.0), xlab = "", xlim = c(-0.75, 2.5), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "forestgreen", main = "")
+legend("topright", legend = c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690"), 
+       fill = c("black", "red", "blue", "forestgreen"), bty = 'n')
+par(new = FALSE)
+
+plot(density(tideData$Pensacola, na.rm = TRUE), ylim = c(0, 2.0), xlab = "Tide Height (m NAVD88)", xlim = c(-0.5, 0.7), lwd = 2, 
+     cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Tide Height Distribution")
+par(new = TRUE)
+plot(density(tideData$Panama.City.Beach, na.rm = TRUE), ylim = c(0, 2.0), xlab = "", xlim = c(-0.5, 0.7), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(density(tideData$Panama.City, na.rm = TRUE), ylim = c(0, 2.0), xlab = "", xlim = c(-0.5, 0.7), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "blue", main = "")
+par(new = TRUE)
+plot(density(tideData$Apalachicola, na.rm = TRUE), ylim = c(0, 2.0), xlab = "", xlim = c(-0.5, 0.7), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "forestgreen", main = "")
+legend("topleft", legend = c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690"), 
+       fill = c("black", "red", "blue", "forestgreen"), bty = 'n')
+par(new = FALSE)
+
+```
+  
+```{r visualization_all_3, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(ecdf(tideData$Pensacola), xlab = "Tide Height (m NAVD88)", xlim = c(-0.75, 2.5), ylab = "Cumulative Proportion", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, 
+     col = "black", main = "Tide Height ECDF")
+par(new = TRUE)
+plot(ecdf(tideData$Panama.City.Beach), xlab = "", xlim = c(-0.75, 2.5), ylab = "", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "red", 
+     main = "")
+par(new = TRUE)
+plot(ecdf(tideData$Panama.City), xlab = "", xlim = c(-0.75, 2.5), ylab = "", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "blue", main = "")
+par(new = TRUE)
+plot(ecdf(tideData$Apalachicola), xlab = "", xlim = c(-0.75, 2.5), ylab = "", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "forestgreen", 
+     main = "")
+legend(x = 1.2, y = 0.9, legend = c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690"), 
+       fill = c("black", "red", "blue", "forestgreen"), bty = 'n')
+par(new = FALSE)
+
+plot(ecdf(tideData$Pensacola), xlab = "Tide Height (m NAVD88)", xlim = c(-0.5, 0.7), ylab = "Cumulative Proportion", lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "black", main = "Tide Height ECDF")
+par(new = TRUE)
+plot(ecdf(tideData$Panama.City.Beach), xlab = "", xlim = c(-0.5, 0.7), ylab = "", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "red", 
+     main = "")
+par(new = TRUE)
+plot(ecdf(tideData$Panama.City), xlab = "", xlim = c(-0.5, 0.7), ylab = "", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "blue", main = "")
+par(new = TRUE)
+plot(ecdf(tideData$Apalachicola), xlab = "", xlim = c(-0.5, 0.7), ylab = "", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "forestgreen", 
+     main = "")
+legend(x = -0.5, y = 0.9, legend = c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690"), 
+       fill = c("black", "red", "blue", "forestgreen"), bty = 'n')
+par(new = FALSE)
+
+```
+  
+Below is a summary of the available tide data from each station. Though most high tides are no more than ~0.47 m NAVD88 (95th percentile), maximum observed tides - corresponding to storm surges - approach or exceed 2 m NAVD88.  
+  
+```{r summary_all, message = FALSE, warning = FALSE}
+
+summaryVariables <- c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690")
+summaryTerms <- c("Mean", "SE", "N", "Median", "Min", "Max", "95th Percentile")
+
+summaryMean <- c(round(mean(tideData$Pensacola, na.rm = TRUE), 3),
+                   round(mean(tideData$Panama.City.Beach, na.rm = TRUE), 3),
+                   round(mean(tideData$Panama.City, na.rm = TRUE), 3),
+                   round(mean(tideData$Apalachicola, na.rm = TRUE), 3))
+summarySE <- c(round(std.error(tideData$Pensacola, na.rm = TRUE), 3),
+                   round(std.error(tideData$Panama.City.Beach, na.rm = TRUE), 3),
+                   round(std.error(tideData$Panama.City, na.rm = TRUE), 3),
+                   round(std.error(tideData$Apalachicola, na.rm = TRUE), 3))
+summaryN <- c(length(tideData[!is.na(tideData$Pensacola),]$Pensacola),
+                length(tideData[!is.na(tideData$Panama.City.Beach),]$Panama.City.Beach),
+                length(tideData[!is.na(tideData$Panama.City),]$Panama.City),
+                length(tideData[!is.na(tideData$Apalachicola),]$Apalachicola))
+summaryMedian <- c(round(median(tideData$Pensacola, na.rm = TRUE), 3),
+                   round(median(tideData$Panama.City.Beach, na.rm = TRUE), 3),
+                   round(median(tideData$Panama.City, na.rm = TRUE), 3),
+                   round(median(tideData$Apalachicola, na.rm = TRUE), 3))
+summaryMin <- c(min(tideData$Pensacola, na.rm = TRUE),
+                   min(tideData$Panama.City.Beach, na.rm = TRUE),
+                   min(tideData$Panama.City, na.rm = TRUE),
+                   min(tideData$Apalachicola, na.rm = TRUE))
+summaryMax <- c(max(tideData$Pensacola, na.rm = TRUE),
+                   max(tideData$Panama.City.Beach, na.rm = TRUE),
+                   max(tideData$Panama.City, na.rm = TRUE),
+                   max(tideData$Apalachicola, na.rm = TRUE))
+summary95 <- c(unname(quantile(tideData$Pensacola, probs = 0.95, na.rm = TRUE)),
+                 unname(quantile(tideData$Panama.City.Beach, probs = 0.95, na.rm = TRUE)),
+                 unname(quantile(tideData$Panama.City, probs = 0.95, na.rm = TRUE)),
+                 unname(quantile(tideData$Apalachicola, probs = 0.95, na.rm = TRUE)))
+
+allSummary <- as.data.frame(rbind(summaryMean, summarySE, summaryN, summaryMedian, summaryMin, summaryMax, summary95))
+colnames(allSummary) <- summaryVariables
+rownames(allSummary) <- summaryTerms
+kable(allSummary, caption = "Tidal Data - Hourly, 1998 to 2019")
+
+```
+  
+***  
+***  
+  
+## Nesting Season Only - Hourly Data  
+  
+Below are visualizations of tide height only during the nesting season (May through October). Mean sea level during this time is slightly elevated relative to the full-year average - ~0.16-0.22 m above baseline for the NAVD88 vertical datum.  
+  
+```{r visualization_nest_1, fig.width = 12, fig.height = 9}
+
+tideData_Nest <- tideData %>%
+  filter(Turtle.Season == "Yes")
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(4, 1))
+plot(tideData_Nest$Date.Time..GMT., tideData_Nest$Pensacola, xlab = "Date", ylim = c(-0.75, 2.5), ylab = "Tide Height (m NAVD88)", type = "l", 
+     lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Pensacola #8729840")
+plot(tideData_Nest$Date.Time..GMT., tideData_Nest$Panama.City.Beach, xlab = "Date", ylim = c(-0.75, 2.5), ylab = "Tide Height (m NAVD88)", 
+     type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Panama City Beach #8729210")
+plot(tideData_Nest$Date.Time..GMT., tideData_Nest$Panama.City, xlab = "Date", ylim = c(-0.75, 2.5), ylab = "Tide Height (m NAVD88)", 
+     type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Panama City #8729108")
+plot(tideData_Nest$Date.Time..GMT., tideData_Nest$Apalachicola, xlab = "Date", ylim = c(-0.75, 2.5), ylab = "Tide Height (m NAVD88)", 
+     type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Apalachicola #8728690")
+
+```
+  
+```{r visualization_nest_2, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(density(tideData_Nest$Pensacola, na.rm = TRUE), ylim = c(0, 2.1), xlab = "Tide Height (m NAVD88))", xlim = c(-0.75, 2.5), lwd = 2, 
+     cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Tide Height Distribution - Nesting Season")
+par(new = TRUE)
+plot(density(tideData_Nest$Panama.City.Beach, na.rm = TRUE), ylim = c(0, 2.1), xlab = "", xlim = c(-0.75, 2.5), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(density(tideData_Nest$Panama.City, na.rm = TRUE), ylim = c(0, 2.1), xlab = "", xlim = c(-0.75, 2.5), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "blue", main = "")
+par(new = TRUE)
+plot(density(tideData_Nest$Apalachicola, na.rm = TRUE), ylim = c(0, 2.1), xlab = "", xlim = c(-0.75, 2.5), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "forestgreen", main = "")
+legend("topright", legend = c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690"), 
+       fill = c("black", "red", "blue", "forestgreen"), bty = 'n')
+par(new = FALSE)
+
+plot(density(tideData_Nest$Pensacola, na.rm = TRUE), ylim = c(0, 2.1), xlab = "Tide Height (m NAVD88)", xlim = c(-0.5, 0.7), lwd = 2, 
+     cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Tide Height Distribution - Nesting Season")
+par(new = TRUE)
+plot(density(tideData_Nest$Panama.City.Beach, na.rm = TRUE), ylim = c(0, 2.1), xlab = "", xlim = c(-0.5, 0.7), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(density(tideData_Nest$Panama.City, na.rm = TRUE), ylim = c(0, 2.1), xlab = "", xlim = c(-0.5, 0.7), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "blue", main = "")
+par(new = TRUE)
+plot(density(tideData_Nest$Apalachicola, na.rm = TRUE), ylim = c(0, 2.1), xlab = "", xlim = c(-0.5, 0.7), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "forestgreen", main = "")
+legend("topleft", legend = c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690"), 
+       fill = c("black", "red", "blue", "forestgreen"), bty = 'n')
+par(new = FALSE)
+
+```
+  
+```{r visualization_nest_3, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(ecdf(tideData_Nest$Pensacola), xlab = "Tide Height (m NAVD88)", xlim = c(-0.75, 2.5), ylab = "Cumulative Proportion", lwd = 2, 
+     cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Tide Height ECDF - Nesting Season")
+par(new = TRUE)
+plot(ecdf(tideData_Nest$Panama.City.Beach), xlab = "", xlim = c(-0.75, 2.5), ylab = "", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "red", 
+     main = "")
+par(new = TRUE)
+plot(ecdf(tideData_Nest$Panama.City), xlab = "", xlim = c(-0.75, 2.5), ylab = "", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "blue", 
+     main = "")
+par(new = TRUE)
+plot(ecdf(tideData_Nest$Apalachicola), xlab = "", xlim = c(-0.75, 2.5), ylab = "", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "forestgreen", 
+     main = "")
+legend(x = 1.2, y = 0.9, legend = c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690"), 
+       fill = c("black", "red", "blue", "forestgreen"), bty = 'n')
+par(new = FALSE)
+
+plot(ecdf(tideData_Nest$Pensacola), xlab = "Tide Height (m NAVD88)", xlim = c(-0.5, 0.7), ylab = "Cumulative Proportion", lwd = 2, 
+     cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Tide Height ECDF - Nesting Season")
+par(new = TRUE)
+plot(ecdf(tideData_Nest$Panama.City.Beach), xlab = "", xlim = c(-0.5, 0.7), ylab = "", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "red", 
+     main = "")
+par(new = TRUE)
+plot(ecdf(tideData_Nest$Panama.City), xlab = "", xlim = c(-0.5, 0.7), ylab = "", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "blue", 
+     main = "")
+par(new = TRUE)
+plot(ecdf(tideData_Nest$Apalachicola), xlab = "", xlim = c(-0.5, 0.7), ylab = "", lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "forestgreen", 
+     main = "")
+legend(x = -0.5, y = 0.9, legend = c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690"), 
+       fill = c("black", "red", "blue", "forestgreen"), bty = 'n')
+par(new = FALSE)
+
+```
+  
+Below is a summary of the available tide data from each station. The 95th percentile high tide is slightly elevated (~0.50 m) relative to the full-year level. Note that the maximum observed tide heights occurred during the nesting season.  
+  
+```{r summary_nest, message = FALSE, warning = FALSE}
+
+summaryVariables <- c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690")
+summaryTerms <- c("Mean", "SE", "N", "Median", "Min", "Max", "95th Percentile")
+
+summaryMean_Nest <- c(round(mean(tideData_Nest$Pensacola, na.rm = TRUE), 3),
+                   round(mean(tideData_Nest$Panama.City.Beach, na.rm = TRUE), 3),
+                   round(mean(tideData_Nest$Panama.City, na.rm = TRUE), 3),
+                   round(mean(tideData_Nest$Apalachicola, na.rm = TRUE), 3))
+summarySE_Nest <- c(round(std.error(tideData_Nest$Pensacola, na.rm = TRUE), 3),
+                   round(std.error(tideData_Nest$Panama.City.Beach, na.rm = TRUE), 3),
+                   round(std.error(tideData_Nest$Panama.City, na.rm = TRUE), 3),
+                   round(std.error(tideData_Nest$Apalachicola, na.rm = TRUE), 3))
+summaryN_Nest <- c(length(tideData_Nest[!is.na(tideData_Nest$Pensacola),]$Pensacola),
+                length(tideData_Nest[!is.na(tideData_Nest$Panama.City.Beach),]$Panama.City.Beach),
+                length(tideData_Nest[!is.na(tideData_Nest$Panama.City),]$Panama.City),
+                length(tideData_Nest[!is.na(tideData_Nest$Apalachicola),]$Apalachicola))
+summaryMedian_Nest <- c(round(median(tideData_Nest$Pensacola, na.rm = TRUE), 3),
+                   round(median(tideData_Nest$Panama.City.Beach, na.rm = TRUE), 3),
+                   round(median(tideData_Nest$Panama.City, na.rm = TRUE), 3),
+                   round(median(tideData_Nest$Apalachicola, na.rm = TRUE), 3))
+summaryMin_Nest <- c(min(tideData_Nest$Pensacola, na.rm = TRUE),
+                   min(tideData_Nest$Panama.City.Beach, na.rm = TRUE),
+                   min(tideData_Nest$Panama.City, na.rm = TRUE),
+                   min(tideData_Nest$Apalachicola, na.rm = TRUE))
+summaryMax_Nest <- c(max(tideData_Nest$Pensacola, na.rm = TRUE),
+                   max(tideData_Nest$Panama.City.Beach, na.rm = TRUE),
+                   max(tideData_Nest$Panama.City, na.rm = TRUE),
+                   max(tideData_Nest$Apalachicola, na.rm = TRUE))
+summary95_Nest <- c(unname(quantile(tideData_Nest$Pensacola, probs = 0.95, na.rm = TRUE)),
+                 unname(quantile(tideData_Nest$Panama.City.Beach, probs = 0.95, na.rm = TRUE)),
+                 unname(quantile(tideData_Nest$Panama.City, probs = 0.95, na.rm = TRUE)),
+                 unname(quantile(tideData_Nest$Apalachicola, probs = 0.95, na.rm = TRUE)))
+
+allSummary_Nest <- as.data.frame(rbind(summaryMean_Nest, summarySE_Nest, summaryN_Nest, summaryMedian_Nest, summaryMin_Nest, summaryMax_Nest, summary95_Nest))
+colnames(allSummary_Nest) <- summaryVariables
+rownames(allSummary_Nest) <- summaryTerms
+kable(allSummary_Nest, caption = "Nesting Season Tidal Data - Hourly, 1998 to 2019")
+
+```
+  
+***  
+***  
+  
+## Calculate average daily tidal minimum, maximum, and range by station within the nesting season  
+  
+The tidal range is small in the northern Gulf of Mexico - ranging from 0.376 m to 0.518 m by station. Coupled with the low wave activity reported by the 3 offshore buoys, beaches in the study area are typically dissipative with broad, flat profiles.  
+  
+```{r tidal_range_nest}
+
+highTide <- matrix(rep(NA, length(length(unique(tideData_Nest$Date))*4)), nrow = length(unique(tideData_Nest$Date)), ncol = 4) 
+# empty vector to hold 
+                                                                                                                                
+# summarized data
+for(i in 8:11){ # column numbers with observed tide data
+  highTide[,i-7] <- aggregate(tideData_Nest[,i], by = list(tideData_Nest$Date), max)[,2] # maximum tide by day for each station
+}
+colnames(highTide) <- names(tideData_Nest[c(8:11)])
+
+lowTide <- matrix(rep(NA, length(length(unique(tideData_Nest$Date))*4)), nrow = length(unique(tideData_Nest$Date)), ncol = 4) 
+# empty vector to hold 
+                                                                                                                                
+# summarized data
+for(i in 8:11){ # column numbers with observed tide data
+  lowTide[,i-7] <- aggregate(tideData_Nest[,i], by = list(tideData_Nest$Date), min)[,2] # maximum tide by day for each station
+}
+colnames(lowTide) <- names(tideData_Nest[c(8:11)])
+
+rangeTide <- highTide - lowTide
+
+tidalRange <- rbind(round(colMeans(highTide, na.rm = TRUE), 3), round(colMeans(lowTide, na.rm = TRUE), 3), round(colMeans(rangeTide, 
+                                                                                                                          na.rm = TRUE), 3))
+colnames(tidalRange) <- c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690")
+rownames(tidalRange) <- c("mean High Tide (m NAVD88)", "mean Low Tide (m NAVD88)", "mean Range (m NAVD88)")
+kable(tidalRange)
+
+```
+  
+***  
+***  
+  
+## Intra-Annual Distributions  
+  
+Below is the monthly and weekly high tide heights at each station derived from the hourly data. Note the general increasing trend throughout the nesting season. The highest daily tides correspond with typical hatchling emergence.  
+  
+```{r monthly_tideheight, fig.height = 4, fig.width = 7}
+
+Months <- seq(from = 1, to = 12, by = 1)
+
+pensMonth_mean <- NULL
+pensMonth_se <- NULL
+pcbMonth_mean <- NULL
+pcbMonth_se <- NULL
+pcMonth_mean <- NULL
+pcMonth_se <- NULL
+apalMonth_mean <- NULL
+apalMonth_se <- NULL
+
+for(i in Months){
+  pensMonth_mean[i] <- mean(aggregate(tideData[tideData$Month == i,]$Pensacola, by = list(tideData[tideData$Month == i,]$Date), max)[,2], 
+                            na.rm = TRUE)
+  pensMonth_se[i] <- std.error(aggregate(tideData[tideData$Month == i,]$Pensacola, by = list(tideData[tideData$Month == i,]$Date), max)[,2], 
+                               na.rm = TRUE)
+  pcbMonth_mean[i] <- mean(aggregate(tideData[tideData$Month == i,]$Panama.City.Beach, 
+                                     by = list(tideData[tideData$Month == i,]$Date), max)[,2], na.rm = TRUE)
+  pcbMonth_se[i] <- std.error(aggregate(tideData[tideData$Month == i,]$Panama.City.Beach, 
+                                        by = list(tideData[tideData$Month == i,]$Date), max)[,2], na.rm = TRUE)
+  pcMonth_mean[i] <- mean(aggregate(tideData[tideData$Month == i,]$Panama.City, by = list(tideData[tideData$Month == i,]$Date), max)[,2], 
+                          na.rm = TRUE)
+  pcMonth_se[i] <- std.error(aggregate(tideData[tideData$Month == i,]$Panama.City, by = list(tideData[tideData$Month == i,]$Date), max)[,2], 
+                             na.rm = TRUE)
+  apalMonth_mean[i] <- mean(aggregate(tideData[tideData$Month == i,]$Apalachicola, by = list(tideData[tideData$Month == i,]$Date), max)[,2], 
+                            na.rm = TRUE)
+  apalMonth_se[i] <- std.error(aggregate(tideData[tideData$Month == i,]$Apalachicola, 
+                                         by = list(tideData[tideData$Month == i,]$Date), max)[,2], na.rm = TRUE)
+}
+
+monthlyMeans <- data.frame(cbind("Month" = Months, "Pensacola - mean" = pensMonth_mean, "Pensacola - SE" = pensMonth_se,
+                                 "Panama City Beach - mean" = pcbMonth_mean, "Panama City Beach - SE" = pcbMonth_se,
+                                 "Panama City - mean" = pcMonth_mean, "Panama City - SE" = pcMonth_se,
+                                 "Apalachicola - mean" = apalMonth_mean, "Apalachicola - SE" = apalMonth_se))
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5))
+
+plot(monthlyMeans$Month, monthlyMeans$Pensacola...mean, xlab = "Month", ylab = "Mean High Tide (m NAVD88)", ylim = c(0.15, 0.6), type = 'l', 
+     lwd = 2, col = "black", cex.axis = 1.2, cex.lab = 1.1, main = "Monthly Mean High Tide")
+lines(monthlyMeans$Month, monthlyMeans$Pensacola...mean + (1.96 * monthlyMeans$Pensacola...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 0, alpha = 0.35))
+lines(monthlyMeans$Month, monthlyMeans$Pensacola...mean - (1.96 * monthlyMeans$Pensacola...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 0, alpha = 0.35))
+lines(monthlyMeans$Month, monthlyMeans$Panama.City.Beach...mean, lty = 1, lwd = 2, col = "red")
+lines(monthlyMeans$Month, monthlyMeans$Panama.City.Beach...mean + (1.96 * monthlyMeans$Panama.City.Beach...SE), lty = 2, lwd = 1, 
+      col = rgb(1, 0, 0, alpha = 0.35))
+lines(monthlyMeans$Month, monthlyMeans$Panama.City.Beach...mean - (1.96 * monthlyMeans$Panama.City.Beach...SE), lty = 2, lwd = 1, 
+      col = rgb(1, 0, 0, alpha = 0.35))
+lines(monthlyMeans$Month, monthlyMeans$Panama.City...mean, lty = 1, lwd = 2, col = "blue")
+lines(monthlyMeans$Month, monthlyMeans$Panama.City...mean + (1.96 * monthlyMeans$Panama.City...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 1, alpha = 0.35))
+lines(monthlyMeans$Month, monthlyMeans$Panama.City...mean - (1.96 * monthlyMeans$Panama.City...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 1, alpha = 0.35))
+lines(monthlyMeans$Month, monthlyMeans$Apalachicola...mean, lty = 1, lwd = 2, col = "forestgreen")
+lines(monthlyMeans$Month, monthlyMeans$Apalachicola...mean + (1.96 * monthlyMeans$Apalachicola...SE), lty = 2, lwd = 1, 
+      col = rgb(34, 139, 34, alpha = 0.35, maxColorValue = 255))
+lines(monthlyMeans$Month, monthlyMeans$Apalachicola...mean - (1.96 * monthlyMeans$Apalachicola...SE), lty = 2, lwd = 1, 
+      col = rgb(34, 139, 34, alpha = 0.35, maxColorValue = 255))
+legend("topleft", legend = c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690", 
+                             "Nesting Season"), 
+       fill = c("black", "red", "blue", "forestgreen", "grey"), bty = 'n', ncol = 3, cex = 0.9)
+rect(xleft = 5, ybottom = 0.17, xright = 10, ytop = 0.51, col = rgb(90, 90, 90, alpha = 35, maxColorValue = 255), border = FALSE)
+
+```
+
+  
+```{r weekly_tideheight, fig.height = 8, fig.width = 7}
+
+Weeks <- seq(from = 1, to = 53, by = 1)
+
+pensWeek_mean <- NULL
+pensWeek_se <- NULL
+pcbWeek_mean <- NULL
+pcbWeek_se <- NULL
+pcWeek_mean <- NULL
+pcWeek_se <- NULL
+apalWeek_mean <- NULL
+apalWeek_se <- NULL
+
+for(i in Weeks){
+  pensWeek_mean[i] <- mean(aggregate(tideData[tideData$Week == i,]$Pensacola, by = list(tideData[tideData$Week == i,]$Date), max)[,2], 
+                           na.rm = TRUE)
+  pensWeek_se[i] <- std.error(aggregate(tideData[tideData$Week == i,]$Pensacola, by = list(tideData[tideData$Week == i,]$Date), max)[,2], 
+                              na.rm = TRUE)
+  pcbWeek_mean[i] <- mean(aggregate(tideData[tideData$Week == i,]$Panama.City.Beach, by = list(tideData[tideData$Week == i,]$Date), max)[,2], 
+                          na.rm = TRUE)
+  pcbWeek_se[i] <- std.error(aggregate(tideData[tideData$Week == i,]$Panama.City.Beach, 
+                                       by = list(tideData[tideData$Week == i,]$Date), max)[,2], 
+                              na.rm = TRUE)
+  pcWeek_mean[i] <- mean(aggregate(tideData[tideData$Week == i,]$Panama.City, by = list(tideData[tideData$Week == i,]$Date), max)[,2], 
+                         na.rm = TRUE)
+  pcWeek_se[i] <- std.error(aggregate(tideData[tideData$Week == i,]$Panama.City, by = list(tideData[tideData$Week == i,]$Date), max)[,2], 
+                            na.rm = TRUE)
+  apalWeek_mean[i] <- mean(aggregate(tideData[tideData$Week == i,]$Apalachicola, by = list(tideData[tideData$Week == i,]$Date), max)[,2], 
+                           na.rm = TRUE)
+  apalWeek_se[i] <- std.error(aggregate(tideData[tideData$Week == i,]$Apalachicola, 
+                                        by = list(tideData[tideData$Week == i,]$Date), max)[,2], na.rm = TRUE)
+}
+
+weeklyMeans <- data.frame(cbind("Week" = Weeks, "Pensacola - mean" = pensWeek_mean, "Pensacola - SE" = pensWeek_se,
+                                 "Panama City Beach - mean" = pcbWeek_mean, "Panama City Beach - SE" = pcbWeek_se,
+                                 "Panama City - mean" = pcWeek_mean, "Panama City - SE" = pcWeek_se,
+                                 "Apalachicola - mean" = apalWeek_mean, "Apalachicola - SE" = apalWeek_se))
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+
+plot(weeklyMeans$Week, weeklyMeans$Pensacola...mean, xlab = "Week", ylab = "Mean High Tide (m NAVD88)", ylim = c(0.15, 0.65), type = 'l', 
+     lwd = 2, col = "black", cex.axis = 1.2, cex.lab = 1.1, main = "Weekly Mean High Tide")
+lines(weeklyMeans$Week, weeklyMeans$Pensacola...mean + (1.96 * weeklyMeans$Pensacola...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 0, alpha = 0.35))
+lines(weeklyMeans$Week, weeklyMeans$Pensacola...mean - (1.96 * weeklyMeans$Pensacola...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 0, alpha = 0.35))
+lines(weeklyMeans$Week, weeklyMeans$Panama.City.Beach...mean, lty = 1, lwd = 2, col = "red")
+lines(weeklyMeans$Week, weeklyMeans$Panama.City.Beach...mean + (1.96 * weeklyMeans$Panama.City.Beach...SE), lty = 2, lwd = 1, 
+      col = rgb(1, 0, 0, alpha = 0.35))
+lines(weeklyMeans$Week, weeklyMeans$Panama.City.Beach...mean - (1.96 * weeklyMeans$Panama.City.Beach...SE), lty = 2, lwd = 1, 
+      col = rgb(1, 0, 0, alpha = 0.35))
+lines(weeklyMeans$Week, weeklyMeans$Panama.City...mean, lty = 1, lwd = 2, col = "blue")
+lines(weeklyMeans$Week, weeklyMeans$Panama.City...mean + (1.96 * weeklyMeans$Panama.City...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 1, alpha = 0.35))
+lines(weeklyMeans$Week, weeklyMeans$Panama.City...mean - (1.96 * weeklyMeans$Panama.City...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 1, alpha = 0.35))
+lines(weeklyMeans$Week, weeklyMeans$Apalachicola...mean, lty = 1, lwd = 2, col = "forestgreen")
+lines(weeklyMeans$Week, weeklyMeans$Apalachicola...mean + (1.96 * weeklyMeans$Apalachicola...SE), lty = 2, lwd = 1, 
+      col = rgb(34, 139, 34, alpha = 0.35, maxColorValue = 255))
+lines(weeklyMeans$Week, weeklyMeans$Apalachicola...mean - (1.96 * weeklyMeans$Apalachicola...SE), lty = 2, lwd = 1, 
+      col = rgb(34, 139, 34, alpha = 0.35, maxColorValue = 255))
+legend("topleft", legend = c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690", 
+                             "Nesting Season"), 
+       fill = c("black", "red", "blue", "forestgreen", "grey"), bty = 'n', ncol = 3, cex = 0.9)
+rect(xleft = 18, ybottom = 0.17, xright = 44, ytop = 0.54, col = rgb(90, 90, 90, alpha = 35, maxColorValue = 255), border = FALSE)
+
+
+plot(smooth.spline(weeklyMeans$Week, weeklyMeans$Pensacola...mean), xlim = c(1, 53), xlab = "Week", ylab = "Mean High Tide (m NAVD88)", 
+     ylim = c(0.15, 0.65), type = 'l', lwd = 2, col = "black", cex.axis = 1.2, cex.lab = 1.1, main = "Cubic Spline")
+lines(smooth.spline(weeklyMeans$Week, weeklyMeans$Panama.City.Beach...mean), lwd = 2, col = "red")
+lines(smooth.spline(weeklyMeans$Week, weeklyMeans$Panama.City...mean), lwd = 2, col = "blue")
+lines(smooth.spline(weeklyMeans$Week, weeklyMeans$Apalachicola...mean), lwd = 2, col = "forestgreen")
+legend("topleft", legend = c("Pensacola #8729840", "Panama City Beach #8729210", "Panama City #8729108", "Apalachicola #8728690", 
+                             "Nesting Season"), 
+       fill = c("black", "red", "blue", "forestgreen", "grey"), bty = 'n', ncol = 3, cex = 0.9)
+rect(xleft = 18, ybottom = 0.17, xright = 44, ytop = 0.51, col = rgb(90, 90, 90, alpha = 35, maxColorValue = 255), border = FALSE)
+
+```
+  
+  

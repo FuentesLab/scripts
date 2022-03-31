@@ -1,0 +1,453 @@
+---
+title: "Panhandle Turtle Data Processing"
+author: "Matt Ware"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+  
+## Background  
+  
+This R Markdown documents the analysis of 4 years of sea turtle nesting data in the Florida Panhandle. This data was collected by field surveyors permitted by the Florida Fish and Wildlife Conservation Commission (FWC) and/or the U.S. Fish and Wildlife Service (USFWS) and reported to FWC. It includes:  
+  
+* Nest date (from which Year, Julian Week, and Julian Day were additionally derived)  
+* Species  
+* Beach monitoring unit  
+* GPS coordinates  
+* Treatment of the nest (e.g., relocated, screened, etc.)  
+* Any disturbance to the nest (e.g., predation, wave wash-over, erosion) and the causal agent (e.g., predator species, storm) and date of disturbance  
+* Emergence date (from which incubation duration was additionally derived)  
+* Inventory results (e.g., number of hatched/unhatched eggs, any live or dead hatchlings still in the nest, from which hatching success [# hatched/# eggs], emergence success [# emerged/# eggs], and emergence rate [# emerged/# hatched] were additionally derived)
+  
+The Excel file was quality checked to identify potential errors and to standardize reporting terminology. This file was then brought into ArcMap 10.6 for visualization. Any points falling outside of the maximum nesting area polygon or on beaches other than their reported beach monitoring unit were removed from further analyses.  
+  
+This analysis uses the following libraries:  
+  
+```{r libraries, message = FALSE, warning = FALSE, echo = TRUE}
+
+library(dplyr)
+library(knitr)
+library(plotrix)
+
+```
+```{r r version}
+
+paste0("This RMarkdown and the included analyses were built using ", R.Version()$version.string)
+
+```
+  
+```{r data_import}
+
+turtleData <- read.csv("Panhandle Nesting Data 2016-2019 For Analysis.csv", header = TRUE)
+
+turtleData$Nest.Date <- as.POSIXct(turtleData$Nest.Date, format = "%m/%d/%Y")
+turtleData$Emerge.Date <- as.POSIXct(turtleData$Emerge.Date, format = "%m/%d/%Y")
+turtleData$Date.Inventoried <- as.POSIXct(turtleData$Date.Inventoried, format = "%m/%d/%Y")
+
+
+Loggerheads <- turtleData %>%
+  filter(Species == "Cc")
+
+```
+  
+***  
+***  
+  
+## Reported Wash-Over Exposure  
+  
+From 2016 to 2019, data on 7040 nests were provided by FWC with valid GPS coordinates - of which, 6773 (96.21%) corresponded to loggerhead sea turtles.  
+  
+2865 loggerhead nests (42.30%) within the dataset were reported to have wave exposure:  
+  
+* 1665 loggerhead nests (24.58% total, 58.12% relative) reported wave wash-over but remained in place  
+* 1121 loggerhead nests (16.55% total, 39.13% relative) reported complete wash-out  
+* 79 loggerhead nests (1.17% total, 2.76% relative) reported partial wash-out  
+  
+```{r washouts_washovers}
+
+Washouts_Complete <- Loggerheads %>%
+  filter(Complete.Wash.Out == "Yes")
+
+Washouts_Partial <- Loggerheads %>%
+  filter(Partial.Wash.Out == "Yes")
+
+Washover_Intact <- Loggerheads %>%
+  filter(Washed.Over == "Yes") %>%
+  filter(Complete.Wash.Out == "No") %>%
+  filter(Partial.Wash.Out == "No")
+
+```
+  
+## Modeled Risk of Wave Wash-Over  
+  
+Washed over nests had a significantly higher probability of wave exposure (13.6%) than their undisturbed counterparts (9.9%, p < 0.001). Completely washed out nests had an even higher probability of exposure (17.3%) while partially washed out nests were the highest (25.1%). All combination are statistically significant.  
+  
+```{r washout_undisturbed_comparison}
+
+Treatment <- NULL
+for(i in 1:length(Loggerheads$Year)){
+  if(Loggerheads$Washed.Over[i] == "No" & !is.na(Loggerheads$Washed.Over[i])){
+    Treatment[i] <- "Undisturbed"
+  } else if(Loggerheads$Washed.Over[i] == "Yes" & !is.na(Loggerheads$Washed.Over[i]) & Loggerheads$Complete.Wash.Out[i] == "No" & 
+            !is.na(Loggerheads$Complete.Wash.Out[i]) & Loggerheads$Partial.Wash.Out[i] == "No" & !is.na(Loggerheads$Partial.Wash.Out[i])){
+    Treatment[i] <- "Washed Over"
+            } else if(Loggerheads$Washed.Over[i] == "Yes" & !is.na(Loggerheads$Washed.Over[i]) & Loggerheads$Complete.Wash.Out[i] == "Yes" & 
+            !is.na(Loggerheads$Complete.Wash.Out[i])){
+    Treatment[i] <- "Complete Wash-Out"
+            } else if(Loggerheads$Washed.Over[i] == "Yes" & !is.na(Loggerheads$Washed.Over[i]) & Loggerheads$Partial.Wash.Out[i] == "Yes" & 
+            !is.na(Loggerheads$Partial.Wash.Out[i])){
+              Treatment[i] <- "Partial Wash-Out"
+            } else {
+              Treatment[i] <- NA
+            }
+}
+
+table(Treatment)
+
+Loggerheads_Adjusted <- cbind(Loggerheads, "Treatment" = Treatment)
+Loggerheads_Adjusted <- Loggerheads_Adjusted %>%
+  filter(!is.na(Treatment))
+
+paste0("Mean probability of wave exposure for completely washed out nest GPS locations: ", 
+       round(mean(Loggerheads_Adjusted[Loggerheads_Adjusted$Treatment == "Complete Wash-Out",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       " (+/- ",
+       round(sd(Loggerheads_Adjusted[Loggerheads_Adjusted$Treatment == "Complete Wash-Out",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       ", n = ", length(Loggerheads_Adjusted[Loggerheads_Adjusted$Treatment == "Complete Wash-Out",]$Species), ")")
+
+paste0("Mean probability of wave exposure for partially washed out nest GPS locations: ", 
+       round(mean(Loggerheads_Adjusted[Loggerheads_Adjusted$Treatment == "Partial Wash-Out",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       " (+/- ",
+       round(sd(Loggerheads_Adjusted[Loggerheads_Adjusted$Treatment == "Partial Wash-Out",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       ", n = ", length(Loggerheads_Adjusted[Loggerheads_Adjusted$Treatment == "Partial Wash-Out",]$Species), ")")
+
+paste0("Mean probability of wave exposure for washed over nest GPS locations: ", 
+       round(mean(Loggerheads_Adjusted[Loggerheads_Adjusted$Treatment == "Washed Over",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       " (+/- ",
+       round(sd(Loggerheads_Adjusted[Loggerheads_Adjusted$Treatment == "Washed Over",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       ", n = ", length(Loggerheads_Adjusted[Loggerheads_Adjusted$Treatment == "Washed Over",]$Species), ")")
+
+paste0("Mean probability of wave exposure for undisturbed nest GPS locations: ", 
+       round(mean(Loggerheads_Adjusted[Loggerheads_Adjusted$Treatment == "Undisturbed",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       " (+/- ",
+       round(sd(Loggerheads_Adjusted[Loggerheads_Adjusted$Treatment == "Undisturbed",]$Wave.Exposure.Proportion..Dis.Eq.), 3), 
+       ", n = ", length(Loggerheads_Adjusted[Loggerheads_Adjusted$Treatment == "Undisturbed",]$Species), ")")
+
+TukeyHSD(aov(Wave.Exposure.Proportion..Dis.Eq. ~ Treatment, data = Loggerheads_Adjusted))
+
+```
+  
+***  
+***  
+  
+## Nest Productivity Assessments  
+  
+Hatching success was significantly lower (p << 0.001) in washed over nests (32.7%) versus undisturbed nests (78.1%).  
+  
+```{r hatching_success}
+
+loggerheadNestsForWashComparison <- Loggerheads %>% # n = 6773
+  filter(Initial.Treatment == "A" | Initial.Treatment == "B" | Initial.Treatment == "C" | Initial.Treatment == "D") %>% # n = 6363
+  filter(Final.Treatment == "A" | Final.Treatment == "B" | Final.Treatment == "C" | Final.Treatment == "D") %>% # n = 6355
+  filter(Predated == "No") %>% # n = 4887
+  filter(Roots == "No") %>% # n = 4596
+  filter(Eggs.Scattered.By.Another.Turtle == "No") %>% # n = 4596
+  filter(Poached == "No") %>% # n = 4591
+  filter(Inventoried == "Yes") %>% # n = 3355
+  filter(!is.na(Hatching.Success)) %>% # n = 3314
+  filter(!is.na(Emergence.Success)) %>% # n = 3314
+  filter(!is.na(Washed.Over)) %>% # n = 3314
+  filter(Complete.Wash.Out == "No") %>% # n = 3287
+  filter(Partial.Wash.Out == "No") %>% # n = 3259
+  filter(Inundated == "No") # n = 2947
+
+paste0("Mean hatch success for washed over nest GPS locations: ", 
+       round(mean(loggerheadNestsForWashComparison[loggerheadNestsForWashComparison$Washed.Over == "Yes",]$Hatching.Success), 3), 
+       " (+/- ",
+       round(sd(loggerheadNestsForWashComparison[loggerheadNestsForWashComparison$Washed.Over == "Yes",]$Hatching.Success), 3), 
+       ", n = ", length(loggerheadNestsForWashComparison[loggerheadNestsForWashComparison$Washed.Over == "Yes",]$Species), ")")
+
+paste0("Mean hatch success for undisturbed nest GPS locations: ", 
+       round(mean(loggerheadNestsForWashComparison[loggerheadNestsForWashComparison$Washed.Over == "No",]$Hatching.Success), 3), 
+       " (+/- ",
+       round(sd(loggerheadNestsForWashComparison[loggerheadNestsForWashComparison$Washed.Over == "No",]$Hatching.Success), 3), 
+       ", n = ", length(loggerheadNestsForWashComparison[loggerheadNestsForWashComparison$Washed.Over == "No",]$Species), ")")
+
+hatch_Binom <- cbind(loggerheadNestsForWashComparison$Binom.Hatch.Success, loggerheadNestsForWashComparison$Binom.Hatch.Fail)
+
+hatchModel <- glm(hatch_Binom ~ Washed.Over, data = loggerheadNestsForWashComparison, family = "binomial")
+summary(hatchModel)
+
+```
+  
+A similar trend was seen for emergence success (30.5% vs. 76.3%, p << 0.001).  
+  
+```{r emergence_success}
+
+paste0("Mean emergence success for washed over nest GPS locations: ", 
+       round(mean(loggerheadNestsForWashComparison[loggerheadNestsForWashComparison$Washed.Over == "Yes",]$Emergence.Success), 3), 
+       " (+/- ",
+       round(sd(loggerheadNestsForWashComparison[loggerheadNestsForWashComparison$Washed.Over == "Yes",]$Emergence.Success), 3), 
+       ", n = ", length(loggerheadNestsForWashComparison[loggerheadNestsForWashComparison$Washed.Over == "Yes",]$Species), ")")
+
+paste0("Mean emergence success for undisturbed nest GPS locations: ", 
+       round(mean(loggerheadNestsForWashComparison[loggerheadNestsForWashComparison$Washed.Over == "No",]$Emergence.Success), 3), 
+       " (+/- ",
+       round(sd(loggerheadNestsForWashComparison[loggerheadNestsForWashComparison$Washed.Over == "No",]$Emergence.Success), 3), 
+       ", n = ", length(loggerheadNestsForWashComparison[loggerheadNestsForWashComparison$Washed.Over == "No",]$Species), ")")
+
+emerge_Binom <- cbind(loggerheadNestsForWashComparison$Binom.Emerge.Success, loggerheadNestsForWashComparison$Binom.Emerge.Fail)
+
+emergeModel <- glm(emerge_Binom ~ Washed.Over, data = loggerheadNestsForWashComparison, family = "binomial")
+summary(emergeModel)
+
+```
+  
+By comparison, the typical predated (but not washed over) nest has a hatching success of 49.9% and an emergence success of 48.8%.  
+  
+```{r comparison_to_predation_hatch}
+
+Predated_Nests <- Loggerheads %>%
+  filter(Predated == "Yes")
+
+Predation_Comparison <- Loggerheads %>% # n = 6773
+  filter(Initial.Treatment == "A" | Initial.Treatment == "B" | Initial.Treatment == "C" | Initial.Treatment == "D") %>% # n = 6363
+  filter(Final.Treatment == "A" | Final.Treatment == "B" | Final.Treatment == "C" | Final.Treatment == "D") %>% # n = 6355
+  filter(!is.na(Predated)) %>% # n = 6355
+  filter(Roots == "No") %>% # n = 5955
+  filter(Eggs.Scattered.By.Another.Turtle == "No") %>% # n = 5954
+  filter(Poached == "No") %>% # n = 5949
+  filter(Inventoried == "Yes") %>% # n = 4441
+  filter(!is.na(Hatching.Success)) %>% # n = 4385
+  filter(!is.na(Emergence.Success)) %>% # n = 4385
+  filter(!is.na(Washed.Over)) %>% # n = 4385
+  filter(Complete.Wash.Out == "No") %>% # n = 4353
+  filter(Partial.Wash.Out == "No") %>% # n = 4312
+  filter(Inundated == "No") # n = 3938
+
+paste0("Mean hatch success for washed over nest GPS locations: ", 
+       round(mean(Predation_Comparison[which(Predation_Comparison$Washed.Over == "Yes" & 
+                                               Predation_Comparison$Predated == "No"),]$Hatching.Success), 3), 
+       " (+/- ",
+       round(sd(Predation_Comparison[which(Predation_Comparison$Washed.Over == "Yes" & 
+                                             Predation_Comparison$Predated == "No"),]$Hatching.Success), 3), 
+       ", n = ", length(Predation_Comparison[which(Predation_Comparison$Washed.Over == "Yes" & 
+                                                     Predation_Comparison$Predated == "No"),]$Species), ")")
+
+paste0("Mean hatch success for predated nest GPS locations: ", 
+       round(mean(Predation_Comparison[which(Predation_Comparison$Predated == "Yes" & 
+                                               Predation_Comparison$Washed.Over == "No"),]$Hatching.Success), 3), 
+       " (+/- ",
+       round(sd(Predation_Comparison[which(Predation_Comparison$Predated == "Yes" & 
+                                             Predation_Comparison$Washed.Over == "No"),]$Hatching.Success), 3), 
+       ", n = ", length(Predation_Comparison[which(Predation_Comparison$Predated == "Yes" & 
+                                                     Predation_Comparison$Washed.Over == "No"),]$Species), ")")
+
+hatch_Binom_Pred <- cbind(Predation_Comparison$Binom.Hatch.Success, Predation_Comparison$Binom.Hatch.Fail)
+
+hatchModel_Pred <- glm(hatch_Binom_Pred ~ Washed.Over * Predated, data = Predation_Comparison, family = "binomial")
+summary(hatchModel_Pred)
+
+```
+  
+```{r comparison_to_predation_emerge}
+
+paste0("Mean emergence success for washed over nest GPS locations: ", 
+       round(mean(Predation_Comparison[which(Predation_Comparison$Washed.Over == "Yes" & 
+                                               Predation_Comparison$Predated == "No"),]$Emergence.Success), 3), 
+       " (+/- ",
+       round(sd(Predation_Comparison[which(Predation_Comparison$Washed.Over == "Yes" & 
+                                             Predation_Comparison$Predated == "No"),]$Emergence.Success), 3), 
+       ", n = ", length(Predation_Comparison[which(Predation_Comparison$Washed.Over == "Yes" & 
+                                                     Predation_Comparison$Predated == "No"),]$Species), ")")
+
+paste0("Mean emergence success for predated nest GPS locations: ", 
+       round(mean(Predation_Comparison[which(Predation_Comparison$Predated == "Yes" & 
+                                               Predation_Comparison$Washed.Over == "No"),]$Emergence.Success), 3), 
+       " (+/- ",
+       round(sd(Predation_Comparison[which(Predation_Comparison$Predated == "Yes" & 
+                                             Predation_Comparison$Washed.Over == "No"),]$Emergence.Success), 3), 
+       ", n = ", length(Predation_Comparison[which(Predation_Comparison$Predated == "Yes" & 
+                                                     Predation_Comparison$Washed.Over == "No"),]$Species), ")")
+
+emerge_Binom_Pred <- cbind(Predation_Comparison$Binom.Emerge.Success, Predation_Comparison$Binom.Emerge.Fail)
+
+emergeModel_Pred <- glm(emerge_Binom_Pred ~ Washed.Over * Predated, data = Predation_Comparison, family = "binomial")
+summary(emergeModel_Pred)
+
+```
+  
+A nest was reported as "inundated" if standing water was found in the nest chamber during the nest excavation/productivity assessment. However, this data does not provide details regarding how long the inundation has been present nor how many times the nest may have been inundated prior to the excavation. Given this limitation, hatching success for inundated (but otherwise undisturbed) nests was 17.1% and emergence success was 15.3%.  
+  
+```{r comparison_to_inundated_hatch}
+
+Inundated_Nests <- Loggerheads %>%
+  filter(Inundated == "Yes")
+
+Inundated_Comparison <- Loggerheads %>% # n = 6773
+  filter(Initial.Treatment == "A" | Initial.Treatment == "B" | Initial.Treatment == "C" | Initial.Treatment == "D") %>% # n = 6363
+  filter(Final.Treatment == "A" | Final.Treatment == "B" | Final.Treatment == "C" | Final.Treatment == "D") %>% # n = 6355
+  filter(Predated == "No") %>% # n = 4887
+  filter(Roots == "No") %>% # n = 4596
+  filter(Eggs.Scattered.By.Another.Turtle == "No") %>% # n = 4596
+  filter(Poached == "No") %>% # n = 4591
+  filter(Inventoried == "Yes") %>% # n = 3355
+  filter(!is.na(Hatching.Success)) %>% # n = 3314
+  filter(!is.na(Emergence.Success)) %>% # n = 3314
+  filter(Washed.Over == "No") %>% # n = 2152
+  filter(Complete.Wash.Out == "No") %>% # n = 2152
+  filter(Partial.Wash.Out == "No") %>% # n = 2152
+  filter(!is.na(Inundated)) # n = 2152
+
+paste0("Mean hatch success for inundated nest GPS locations: ", 
+       round(mean(Inundated_Comparison[Inundated_Comparison$Inundated == "Yes",]$Hatching.Success), 3), 
+       " (+/- ",
+       round(sd(Inundated_Comparison[Inundated_Comparison$Inundated == "Yes",]$Hatching.Success), 3), 
+       ", n = ", length(Inundated_Comparison[Inundated_Comparison$Inundated == "Yes",]$Species), ")")
+
+paste0("Mean hatch success for undisturbed nest GPS locations: ", 
+       round(mean(Inundated_Comparison[Inundated_Comparison$Inundated == "No",]$Hatching.Success), 3), 
+       " (+/- ",
+       round(sd(Inundated_Comparison[Inundated_Comparison$Inundated == "No",]$Hatching.Success), 3), 
+       ", n = ", length(Inundated_Comparison[Inundated_Comparison$Inundated == "No",]$Species), ")")
+
+hatch_Binom_Inund <- cbind(Inundated_Comparison$Binom.Hatch.Success, Inundated_Comparison$Binom.Hatch.Fail)
+
+hatchModel_Inund <- glm(hatch_Binom_Inund ~ Inundated, data = Inundated_Comparison, family = "binomial")
+summary(hatchModel_Inund)
+
+```
+  
+```{r comparison_to_inundation_emerge}
+
+paste0("Mean emergence success for inundated nest GPS locations: ", 
+       round(mean(Inundated_Comparison[Inundated_Comparison$Inundated == "Yes",]$Emergence.Success), 3), 
+       " (+/- ",
+       round(sd(Inundated_Comparison[Inundated_Comparison$Inundated == "Yes",]$Emergence.Success), 3), 
+       ", n = ", length(Inundated_Comparison[Inundated_Comparison$Inundated == "Yes",]$Species), ")")
+
+paste0("Mean emergence success for undisturbed nest GPS locations: ", 
+       round(mean(Inundated_Comparison[Inundated_Comparison$Inundated == "No",]$Emergence.Success), 3), 
+       " (+/- ",
+       round(sd(Inundated_Comparison[Inundated_Comparison$Inundated == "No",]$Emergence.Success), 3), 
+       ", n = ", length(Inundated_Comparison[Inundated_Comparison$Inundated == "No",]$Species), ")")
+
+emerge_Binom_Inund <- cbind(Inundated_Comparison$Binom.Emerge.Success, Inundated_Comparison$Binom.Emerge.Fail)
+
+emergeModel_Inund <- glm(emerge_Binom_Inund ~ Inundated, data = Inundated_Comparison, family = "binomial")
+summary(emergeModel_Inund)
+
+```
+  
+  
+***  
+***  
+  
+## Additional Nesting Analyses  
+  
+Below is a breakdown of the number of loggerhead nests included in the analyses by beach monitoring unit and year. Most of the nests come from Saint George Island (n = 1491, 22.05%), Cape Saint George Island (n = 992, 14.67%), and the Saint Joseph Peninsula (n = 777, 11.49%).  
+GINS - Gulf Islands National Seashore. AFB - Air Force Base. NWR - National Wildlife Refuge.  
+  
+```{r nest_table_Cc, message = FALSE}
+
+countSummary <- table(Loggerheads$Beach.Name, Loggerheads$Year)
+countSummary <- cbind(countSummary, "Total" = rowSums(countSummary))
+countSummary <- rbind(countSummary, "Total" = colSums(countSummary))
+countSummary
+
+```
+  
+From 2016 to 2019, loggerhead nesting typically peaked between 20 June and 08 July, while hatchling emergence peaked between 09 August and 21 August. Slight fluctuations between years was common. The average incubation period was 58.5 days with an average clutch size of 95.2 eggs. Overall mean hatching success was 46.1% while emergence success was 44.7%.  
+  
+```{r temporal_distribution_1_Cc, fig.width = 7, fig.height = 4}
+
+nestDensity_2016_Cc <- density(Loggerheads[Loggerheads$Year == 2016,]$Nest.Day, na.rm = TRUE)
+nestDensity_2017_Cc <- density(Loggerheads[Loggerheads$Year == 2017,]$Nest.Day, na.rm = TRUE)
+nestDensity_2018_Cc <- density(Loggerheads[Loggerheads$Year == 2018,]$Nest.Day, na.rm = TRUE)
+nestDensity_2019_Cc <- density(Loggerheads[Loggerheads$Year == 2019,]$Nest.Day, na.rm = TRUE)
+
+emergeDensity_2016_Cc <- density(Loggerheads[Loggerheads$Year == 2016,]$Emerge.Day, na.rm = TRUE)
+emergeDensity_2017_Cc <- density(Loggerheads[Loggerheads$Year == 2017,]$Emerge.Day, na.rm = TRUE)
+emergeDensity_2018_Cc <- density(Loggerheads[Loggerheads$Year == 2018,]$Emerge.Day, na.rm = TRUE)
+emergeDensity_2019_Cc <- density(Loggerheads[Loggerheads$Year == 2019,]$Emerge.Day, na.rm = TRUE)
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5))
+
+plot(nestDensity_2016_Cc$x, nestDensity_2016_Cc$y, type = 'l', xlim = c(min(Loggerheads$Nest.Day, na.rm = TRUE)-25, 
+                                                                        max(Loggerheads$Emerge.Day, na.rm = TRUE)+25),
+     xlab = "Julian Day", ylim = c(0, 0.030), ylab = "Density", col = "black", lwd = 2, cex.axis = 1.2, cex.lab = 1.2, 
+     main = "Nest and Emergence Date Distribution")
+lines(nestDensity_2017_Cc$x, nestDensity_2017_Cc$y, col = "red", lwd = 2)
+lines(nestDensity_2018_Cc$x, nestDensity_2018_Cc$y, col = "blue", lwd = 2)
+lines(nestDensity_2019_Cc$x, nestDensity_2019_Cc$y, col = "forestgreen", lwd = 2)
+lines(emergeDensity_2016_Cc$x, emergeDensity_2016_Cc$y, col = "black", lwd = 2, lty = 2)
+lines(emergeDensity_2017_Cc$x, emergeDensity_2017_Cc$y, col = "red", lwd = 2, lty = 2)
+lines(emergeDensity_2018_Cc$x, emergeDensity_2018_Cc$y, col = "blue", lwd = 2, lty = 2)
+lines(emergeDensity_2019_Cc$x, emergeDensity_2019_Cc$y, col = "forestgreen", lwd = 2, lty = 2)
+legend("topright", legend = c("Nest", 2016, 2017, 2018, 2019, "Emerge", 2016, 2017, 2018, 2019), 
+       col = c(NA, "black", "red", "blue", "forestgreen", NA, "black", "red", "blue", "forestgreen"), lty = c(NA, 1, 1, 1, 1, NA, 2, 2, 2, 2), 
+       ncol = 2, bty = 'n')
+
+
+```
+  
+```{r temporal_distribution_2_Cc, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(ecdf(Loggerheads[Loggerheads$Year == 2016,]$Nest.Day), xlab = "Julian Day", xlim = c(125, 275), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Nest Date ECDF")
+par(new = TRUE)
+plot(ecdf(Loggerheads[Loggerheads$Year == 2017,]$Nest.Day), xlab = "", xlim = c(125, 275), ylab = "", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "red", main = "")
+par(new = TRUE)
+plot(ecdf(Loggerheads[Loggerheads$Year == 2018,]$Nest.Day), xlab = "", xlim = c(125, 275), ylab = "", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "blue", main = "")
+par(new = TRUE)
+plot(ecdf(Loggerheads[Loggerheads$Year == 2019,]$Nest.Day), xlab = "", xlim = c(125, 275), ylab = "", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "forestgreen", main = "")
+legend(x = 255, y = 0.9, legend = c(2016, 2017, 2018, 2019), fill = c("black", "red", "blue", "forestgreen"), bty = 'n')
+par(new = FALSE)
+
+plot(ecdf(Loggerheads[Loggerheads$Year == 2016,]$Emerge.Day), xlab = "Julian Day", xlim = c(175, 310), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Emerge Date ECDF")
+par(new = TRUE)
+plot(ecdf(Loggerheads[Loggerheads$Year == 2017,]$Emerge.Day), xlab = "", xlim = c(175, 310), ylab = "", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "red", main = "")
+par(new = TRUE)
+plot(ecdf(Loggerheads[Loggerheads$Year == 2018,]$Emerge.Day), xlab = "", xlim = c(175, 310), ylab = "", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "blue", main = "")
+par(new = TRUE)
+plot(ecdf(Loggerheads[Loggerheads$Year == 2019,]$Emerge.Day), xlab = "", xlim = c(175, 310), ylab = "", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "forestgreen", main = "")
+legend(x = 293, y = 0.9, legend = c(2016, 2017, 2018, 2019), fill = c("black", "red", "blue", "forestgreen"), bty = 'n')
+par(new = FALSE)
+
+```
+  
+Of the 6773 loggerhead nests with valid GPS coordinates:  
+* 1530 nests (22.59%) were reported to receive some level of predation  
+* 2961 nests (43.72%) were washed over or inundated at some point during their incubation or after hatchling emergence while 1217 nests (17.97% total, 41.10% washed over/inundated) experienced partial or complete erosion.  
+These counts are not mutually exclusive as a nest could experience multiple disturbances throughout its incubation.  
+  
+```{r general_summary_Cc}
+
+paste0("Mean incubation duration: ", round(mean(Loggerheads$Incubation.Duration, na.rm = TRUE), 1), " days")
+paste0("Mean clutch size: ", round(mean(Loggerheads$Clutch.Size, na.rm = TRUE), 1), " eggs")
+paste0("Mean hatching success: ", round(mean(Loggerheads$Hatching.Success, na.rm = TRUE)*100, 1), "%")
+paste0("Mean emergence success: ", round(mean(Loggerheads$Emergence.Success, na.rm = TRUE)*100, 1), "%")
+
+paste0("N Predated: ", length(Loggerheads[Loggerheads$Predated == "Yes",]$Year), " nests")
+paste0("N Washed Over/Inundated: ", length(Loggerheads[which(Loggerheads$Washed.Over == "Yes" | Loggerheads$Inundated == "Yes"),]$Year), 
+       " nests")
+paste0("N Complete/Partial Erosion: ", length(Loggerheads[which(Loggerheads$Complete.Wash.Out == "Yes" | 
+                                                                  Loggerheads$Partial.Wash.Out == "Yes"),]$Year), " nests")
+
+```
+  
+  
+  
+  
+  
+  
