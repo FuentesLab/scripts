@@ -1,0 +1,1054 @@
+---
+title: "'Leave No Trace' ordinances for coastal species management: Influences on sea turtle nesting success"
+author: "Matt Ware, Mariana Fuentes"
+email: "mw15w@my.fsu.edu"
+date: "12 August, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+  
+## Background  
+  
+In 2015, the city councils of Gulf Shores and Orange Beach, Alabama, USA passed a "Leave No Trace"-type ordinance called the "Leave Only Footprints" Program, to go into effect in 2016, which requires beach visitors to remove their items from the beach at the end of the day, fill in any holes, break down sand castles, and altered what was and was not permissible for beach vendors. The affected areas include the Share the Beach areal designations of Laguna Key, West Beach, and East Beach (Gulf Shores), along with Orange Beach and Alabama Point (Orange Beach). The 2 protected areas along the Alabama coast (the Bon Secour National Wildlife Refuge [BSNWR] and Gulf State Park), already have their own versions of the "Leave Only Footprints" Program. The unincorporated beaches of Fort Morgan are not included in the ordinance.  
+  
+This established a natural BACIPS (Before-After Control-Impact Paired Sites) testing structure to evaluate the impacts of the ordinance on sea turtle nesting success and crawl obstruction. The "Treatment" group encompasses the city limits of Gulf Shores and Orange Beach, Fort Morgan represents a "Control for Population" as it has no ordinance but does have a resident population, and Bon Secour NWR and Gulf State Park are the "Control for Ordinance" as they both have an ordinance but no resident population (Table 1). 2011-2015 nesting data corresponds to the "Pre-ordinance" timeframe, while "Post-ordinance" represents 2016-2018.  
+  
+```{r group_breakdown, echo = FALSE}
+
+library(knitr)
+
+kable(cbind("Treatment Group" = c("Treatment", "Control for Population", "Control for Ordinance"), 
+            "Beach Section" = c("Gulf Shores, Orange Beach", "Fort Morgan", "Bon Secour NWR, Gulf State Park")),
+      caption = "Table 1. Treatment groups")
+
+```
+  
+  
+## Research Questions:  
+  
+### 1) Does the implementation of a "Leave No Trace"-type ordinance result in change in sea turtle crawl or nest distribution between beach sections?  
+  
+### 2) Does the implementation of a "Leave No Trace"-type ordinance result in an increase in sea turtle nesting success?  
+  
+### 3) Does the implementation of a "Leave No Trace"- type ordinance result in a decrease in sea turtle obstructed crawls?  
+  
+The data were loaded into R along with the required libraries. Observations with a missing crawl result (i.e., nest or false crawl) and obstruction presence where removed, along with Dauphin Island data from the full dataset to concentrate on Baldwin County/mainland Alabama.  
+  
+```{r data_import, message = FALSE, echo = FALSE}
+
+LNTdata <- read.csv("CombinedData.csv", header = TRUE)
+LNTdata$Date_Found <- as.POSIXct(LNTdata$Date_Found, format = "%m/%d/%Y")
+
+LNTdata <- LNTdata[!is.na(LNTdata$Success_Nest),]
+LNTdata <- LNTdata[!is.na(LNTdata$Obstructed),]
+LNTdata <- LNTdata[LNTdata$Region != "Dauphin Island",]
+
+```
+  
+This removed 15 missing observations and 164 Dauphin Island crawls.  
+  
+```{r library_load, message = FALSE}
+
+library(knitr)
+library(plotrix)
+library(tidyr)
+
+```
+  
+***  
+  
+## Data Summaries and Statistics  
+  
+### Distribution of Crawls  
+  
+From 2011 to 2018, there were 1,679 crawls observed on mainland Alabama. The breakdown by beach section is listed below (Table 2).  
+  
+```{r distributionChanges1, echo = FALSE}
+
+nCrawlsSection <- tapply(LNTdata$Success_Nest, list(LNTdata$Year, LNTdata$Region), length)
+nCrawlsSection <- nCrawlsSection[,-2]
+nCrawlsSection <- cbind(nCrawlsSection, "Total" = rowSums(nCrawlsSection))
+kable(nCrawlsSection, caption = "Table 2. Number of crawls per beach section per year")
+
+```
+  
+When combined into treatment groups (Tables 3 and 4) ...  
+  
+```{r distributionChanges2, echo = FALSE}
+
+nCrawlsGroup <- as.data.frame(cbind("Treatment" = nCrawlsSection[,3] + nCrawlsSection[,5], "Control Population" = nCrawlsSection[,2], 
+                                    "Control Ordinance" = nCrawlsSection[,1] + nCrawlsSection[,4], "Total" = nCrawlsSection[,6]))
+kable(nCrawlsGroup, caption = "Table 3. Number of crawls per treatment group per year")
+
+```
+  
+```{r distributionChanges3, echo = FALSE}
+
+propCrawlsGroup <- as.data.frame(cbind("Year" = seq(from = 2011, to = 2018, by = 1),
+                                       "Treatment" = round(nCrawlsGroup[,1]/nCrawlsGroup[,4], 3), 
+                                       "Control Population" = round(nCrawlsGroup[,2]/nCrawlsGroup[,4], 3),
+                                       "Control Ordinance" = round(nCrawlsGroup[,3]/nCrawlsGroup[,4], 3)))
+kable(propCrawlsGroup, caption = "Table 4. Proportion of crawls in each treatment group per year")
+
+```
+  
+When summarized pre- vs. post-ordinance implementation (Table 5) ...  
+  
+```{r distributionChanges4, echo = FALSE}
+
+kable(cbind("Time" = c("Pre-Ordinance", "Post-Ordinance"),
+            "Treatment" = c("0.405 (+/- 0.031)", "0.478 (+/- 0.017)"),
+            "Control Population" = c("0.320 (+/- 0.015)", "0.251 (+/- 0.018)"),
+            "Control Ordinance" = c("0.275 (+/- 0.033)", "0.272 (+/- 0.027)")),
+      caption = "Table 5. Proportion of crawls (+/-1 SE) by treatment group before and after ordinance implementation")
+
+```
+  
+**Statistical Tests**  
+  
+A Poisson regression was run to determine changes in the total number of crawls was evaluated as a function of treatment group, time (i.e., pre- vs. post-ordinance), and the interaction between group and time.  
+  
+In Poisson regression, the log counts are a function of the predictor variables in ...  
+  
+$log(Count) = \beta_{0} + \beta_{1}Var_{1} + ... + \beta_{x}Var_{x}$  
+  
+Converted into counts, this is ... 
+  
+$Count = exp(\beta_{0} + \beta_{1}Var_{1} + ... + \beta_{x}Var_{x})$  
+  
+Changes in the total number of crawls was evaluated as a function of  in a Poison generalized linear model. The total number of crawls was significantly different between treatment group (p = 0.045) and pre- vs. post-ordinance (p = 0.001), but the interaction term was not significant (p = 0.537). This indicates that the distribution of crawls did not significantly change across the study area after the ordinance.  
+  
+```{r distributionChanges5, echo = FALSE}
+
+nCrawlsGroup3 <- gather(nCrawlsGroup[,-4], Group, Count)
+nCrawlsGroup3 <- cbind(nCrawlsGroup3, "Time" = rep(c(rep("1_Pre", 5), rep("2_Post", 3)), 3))
+crawlDistrib_Full <- glm(Count ~ Group * Time, data = nCrawlsGroup3, family = "quasipoisson")
+anova(crawlDistrib_Full, test = "Chisq")
+
+crawlDistrib_NoInt <- glm(Count ~ Group + Time, data = nCrawlsGroup3, family = "quasipoisson")
+anova(crawlDistrib_Full, crawlDistrib_NoInt, test = "Chisq")
+
+crawlDistrib_NoGroup <- glm(Count ~ Time, data = nCrawlsGroup3, family = "quasipoisson")
+anova(crawlDistrib_NoInt, crawlDistrib_NoGroup, test = "Chisq")
+
+crawlDistrib_NoTime <- glm(Count ~ Group, data = nCrawlsGroup3, family = "quasipoisson")
+anova(crawlDistrib_NoInt, crawlDistrib_NoTime, test = "Chisq")
+
+```
+  
+Under the reduced model, the number of crawls equals ...  
+  
+$Crawls = exp(3.853 + 0.006Control_{Pop} + 0.419Treatment + 0.531Post_{Ord})$  
+  
+where $Control_{Pop}$ equals 1 if the area of interest is Fort Morgan (otherwise, it equals 0), $Treatment$ equals 1 if the area of interest is Gulf Shores or Orange Beach (otherwise, it equals 0), and $Post_{Ord}$ equals 1 if the time of interest is 2016 or later (otherwise, it equals 0).  
+  
+```{r distributionChanges6, echo = FALSE}
+
+summary(crawlDistrib_NoInt)
+
+```
+  
+```{r distributionChangesCrawlsPlots, echo = FALSE, fig.width = 9, fig.height = 4}
+
+crawlCountGroupMean <- tapply(nCrawlsGroup3$Count, list(nCrawlsGroup3$Group), mean, na.rm = TRUE)
+crawlCountGroupSE <- tapply(nCrawlsGroup3$Count, list(nCrawlsGroup3$Group), std.error, na.rm = TRUE)
+crawlCountGroupTable <- as.data.frame(cbind(Mean = crawlCountGroupMean, SE = crawlCountGroupSE))
+
+crawlCountTimeMean <- tapply(nCrawlsGroup3$Count, list(nCrawlsGroup3$Time), mean, na.rm = TRUE)
+crawlCountTimeSE <- tapply(nCrawlsGroup3$Count, list(nCrawlsGroup3$Time), std.error, na.rm = TRUE)
+crawlCountTimeTable <- as.data.frame(cbind(Mean = crawlCountTimeMean, SE = crawlCountTimeSE))
+
+#jpeg("Number of crawls by treatment and time.jpg", width = 8, height = 4, units = "in", res = 300)
+#windows(8,4)
+par(mfrow = c(1,2), family = "serif", mar = c(4.5, 5.5, 2.5, 0.5))
+plotGroupCrawl <- barplot(crawlCountGroupMean, names.arg = c("Control\nOrd", "Control\nPop", "Treatment"), xlab = "Treatment Group", xpd = FALSE,
+                     ylab = "Mean Number of Crawls", ylim = c(40, 120), cex.axis = 1.2, cex.lab = 1.2, cex.names = 1.1,
+                     col = c(rgb(255, 0, 0, maxColorValue = 255), rgb(255, 255, 191, maxColorValue = 255), rgb(0, 111, 255, maxColorValue = 255)))
+arrows(plotGroupCrawl, crawlCountGroupMean - crawlCountGroupSE, plotGroupCrawl, crawlCountGroupMean + crawlCountGroupSE, lwd = 2, angle = 90, 
+       length = 0.1, code = 3)
+mtext("A.", side = 3, outer = FALSE, line = 1, adj = 0, cex = 1.2)
+plotTimeCrawl <- barplot(crawlCountTimeMean, names.arg = c("Pre-\nOrdinance", "Post-\nOrdinance"), xlab = "Time", xpd = FALSE,
+                     ylab = "Mean Number of Crawls", ylim = c(40, 120), cex.axis = 1.2, cex.lab = 1.2, cex.names = 1.1,
+                     col = c("grey"))
+arrows(plotTimeCrawl, crawlCountTimeMean - crawlCountTimeSE, plotTimeCrawl, crawlCountTimeMean + crawlCountTimeSE, lwd = 2, angle = 90, 
+       length = 0.1, code = 3)
+mtext("B.", side = 3, outer = FALSE, line = 1, adj = 0, cex = 1.2)
+#dev.off()
+
+```
+  
+There is an increasing trend in the number of crawls in mainland Alabama from 2011 to 2018 (~12 crawls per year), though it is not statistically significant.  
+  
+```{r plot_crawls_years, echo = FALSE}
+
+crawls <- tapply(LNTdata$ID, list(LNTdata$Year), length)
+years <- seq(from = 2011, to = 2018, by = 1)
+crawls <- as.data.frame(cbind("Year" = years, "Total" = crawls))
+
+lmCrawls <- glm(Total ~ Year, data = crawls, family = "quasipoisson")
+lmCrawls_Predict <- predict(lmCrawls, newdata = list(Year = years), se.fit = TRUE)
+
+summary(lmCrawls)
+
+plot(years, crawls$Total, type = "l", col = "black", lwd = 2, xlab = "Year", ylim = c(80, 400), ylab = "Number of Crawls", 
+     main = "County-wide Number of Crawls")
+lines(years, exp(lmCrawls_Predict$fit), lwd = 1, lty = 1, col = "red")
+lines(years, exp(lmCrawls_Predict$fit+(1.96*lmCrawls_Predict$se.fit)), lwd = 1, lty = 2, col = "red")
+lines(years, exp(lmCrawls_Predict$fit-(1.96*lmCrawls_Predict$se.fit)), lwd = 1, lty = 2, col = "red")
+
+```
+  
+### Distribution of Nests  
+  
+From 2011 to 2018, there were 901 nests observed on mainland Alabama. The breakdown by beach section is listed below (Table 6).  
+  
+```{r distributionChangesNests1, echo = FALSE}
+
+nNests <- tapply(LNTdata$Success_Nest, list(LNTdata$Year, LNTdata$Region), sum)
+nNests <- nNests[,-2]
+nNestsSection <- cbind(nNests, "Total" = rowSums(nNests))
+kable(nNestsSection, caption = "Table 6. Number of nests per beach section per year")
+
+```
+  
+When combined into treatment groups (Tables 7 and 8) ...  
+  
+```{r distributionChangesNests2, echo = FALSE}
+
+nNestsGroup <- as.data.frame(cbind("Treatment" = nNestsSection[,3] + nNestsSection[,5], "Control Population" = nNestsSection[,2], 
+                                    "Control Ordinance" = nNestsSection[,1] + nNestsSection[,4], "Total" = nNestsSection[,6]))
+kable(nNestsGroup, caption = "Table 7. Number of nests per treatment group per year")
+
+```
+  
+```{r distributionChangesNests3, echo = FALSE}
+
+propNestsGroup <- as.data.frame(cbind("Year" = seq(from = 2011, to = 2018, by = 1),
+                                       "Treatment" = round(nNestsGroup[,1]/nNestsGroup[,4], 3), 
+                                       "Control Population" = round(nNestsGroup[,2]/nNestsGroup[,4], 3),
+                                       "Control Ordinance" = round(nNestsGroup[,3]/nNestsGroup[,4], 3)))
+kable(propNestsGroup, caption = "Table 8. Proportion of nests in each treatment group per year")
+
+```
+  
+When summarized pre- vs. post-ordinance implementation (Table 9) ...  
+  
+```{r distributionChangesNests4, echo = FALSE}
+
+kable(cbind("Time" = c("Pre-Ordinance", "Post-Ordinance"),
+            "Treatment" = c("0.405 (+/- 0.014)", "0.454 (+/- 0.011)"),
+            "Control Population" = c("0.307 (+/- 0.009)", "0.264 (+/- 0.034)"),
+            "Control Ordinance" = c("0.288 (+/- 0.021)", "0.282 (+/- 0.037)")),
+      caption = "Table 9. Proportion of nests (+/-1 SE) by treatment group before and after ordinance implementation")
+
+```
+  
+**Statistical Tests**  
+  
+Changes in the total number of nests was evaluated as a function of treatment group, time (i.e., pre- vs. post-ordinance), and the interaction between group and time in a Poison generalized linear model. The total number of nests was significantly different between treatment group (p = 0.043) and pre- vs. post-ordinance (p = 0.005), but the interaction term was not significant (p = 0.790). This indicates that the distribution of nests did not significantly change across the study area after the ordinance.  
+  
+```{r distributionChangesNests5, echo = FALSE}
+
+nNestsGroup3 <- gather(nNestsGroup[,-4], Group, Count)
+nNestsGroup3 <- cbind(nNestsGroup3, "Time" = rep(c(rep("1_Pre", 5), rep("2_Post", 3)), 3))
+nestDistrib_Full <- glm(Count ~ Group * Time, data = nNestsGroup3, family = "quasipoisson")
+anova(nestDistrib_Full, test = "Chisq")
+
+nestDistrib_NoInt <- glm(Count ~ Group + Time, data = nNestsGroup3, family = "quasipoisson")
+anova(nestDistrib_Full, nestDistrib_NoInt, test = "Chisq")
+
+nestDistrib_NoGroup <- glm(Count ~ Time, data = nNestsGroup3, family = "quasipoisson")
+anova(nestDistrib_NoInt, nestDistrib_NoGroup, test = "Chisq")
+
+nestDistrib_NoTime <- glm(Count ~ Group, data = nNestsGroup3, family = "quasipoisson")
+anova(nestDistrib_NoInt, nestDistrib_NoTime, test = "Chisq")
+
+```
+  
+Under the reduced model, the number of nests equals ...  
+  
+$Nests = exp(3.306 - 0.019Control_{Pop} + 0.377Treatment + 0.429Post_{Ord})$  
+  
+where $Control_{Pop}$ equals 1 if the area of interest is Fort Morgan (otherwise, it equals 0), $Treatment$ equals 1 if the area of interest is Gulf Shores or Orange Beach (otherwise, it equals 0), and $Post_{Ord}$ equals 1 if the time of interest is 2016 or later (otherwise, it equals 0).  
+  
+```{r distributionChangesNests6, echo = FALSE}
+
+summary(nestDistrib_NoInt)
+
+```
+  
+```{r distributionChangesNestsPlots, echo = FALSE, fig.width = 9, fig.height = 4}
+
+nestCountGroupMean <- tapply(nNestsGroup3$Count, list(nNestsGroup3$Group), mean, na.rm = TRUE)
+nestCountGroupSE <- tapply(nNestsGroup3$Count, list(nNestsGroup3$Group), std.error, na.rm = TRUE)
+nestCountGroupTable <- as.data.frame(cbind(Mean = nestCountGroupMean, SE = nestCountGroupSE))
+
+nestCountTimeMean <- tapply(nNestsGroup3$Count, list(nNestsGroup3$Time), mean, na.rm = TRUE)
+nestCountTimeSE <- tapply(nNestsGroup3$Count, list(nNestsGroup3$Time), std.error, na.rm = TRUE)
+nestCountTimeTable <- as.data.frame(cbind(Mean = nestCountTimeMean, SE = nestCountTimeSE))
+
+#jpeg("Number of nests by treatment and time.jpg", width = 8, height = 4, units = "in", res = 300)
+#windows(8,4)
+par(mfrow = c(1,2), family = "serif", mar = c(4.5, 5.5, 2.5, 0.5))
+plotGroup <- barplot(nestCountGroupMean, names.arg = c("Control\nOrd", "Control\nPop", "Treatment"), xlab = "Treatment Group", xpd = FALSE,
+                     ylab = "Mean Number of Nests", ylim = c(20, 60), cex.axis = 1.2, cex.lab = 1.2, cex.names = 1.1,
+                     col = c(rgb(255, 0, 0, maxColorValue = 255), rgb(255, 255, 191, maxColorValue = 255), rgb(0, 111, 255, maxColorValue = 255)))
+arrows(plotGroup, nestCountGroupMean - nestCountGroupSE, plotGroup, nestCountGroupMean + nestCountGroupSE, lwd = 2, angle = 90, length = 0.1, 
+       code = 3)
+mtext("A.", side = 3, outer = FALSE, line = 1, adj = 0, cex = 1.2)
+plotTime <- barplot(nestCountTimeMean, names.arg = c("Pre-\nOrdinance", "Post-\nOrdinance"), xlab = "Time", xpd = FALSE,
+                     ylab = "Mean Number of Nests", ylim = c(20, 60), cex.axis = 1.2, cex.lab = 1.2, cex.names = 1.1,
+                     col = c("grey"))
+arrows(plotTime, nestCountTimeMean - nestCountTimeSE, plotTime, nestCountTimeMean + nestCountTimeSE, lwd = 2, angle = 90, length = 0.1, 
+       code = 3)
+mtext("B.", side = 3, outer = FALSE, line = 1, adj = 0, cex = 1.2)
+#dev.off()
+
+```
+  
+There is an increasing trend in the number of crawls in mainland Alabama from 2011 to 2018 (~4.5 nests per year), though it is not statistically significant.  
+  
+```{r plot_nests_years, echo = FALSE}
+
+nests <- tapply(LNTdata[LNTdata$Crawl_Type == "Nest",]$ID, list(LNTdata[LNTdata$Crawl_Type == "Nest",]$Year), length)
+nests <- as.data.frame(cbind("Year" = years, "Total" = nests))
+
+lmNests <- glm(Total ~ Year, data = nests, family = "quasipoisson")
+lmNests_Predict <- predict(lmNests, newdata = list(Year = years), se.fit = TRUE)
+
+summary(lmNests)
+
+plot(years, nests$Total, type = "l", col = "black", lwd = 2, xlab = "Year", ylim = c(40, 220), ylab = "Number of Nests", 
+     main = "County-wide Number of Nests")
+lines(years, exp(lmNests_Predict$fit), lwd = 1, lty = 1, col = "red")
+lines(years, exp(lmNests_Predict$fit+(1.96*lmNests_Predict$se.fit)), lwd = 1, lty = 2, col = "red")
+lines(years, exp(lmNests_Predict$fit-(1.96*lmNests_Predict$se.fit)), lwd = 1, lty = 2, col = "red")
+
+```
+  
+***
+  
+### Nesting Success  
+  
+*County-wide*  
+  
+Across mainland Alabama (i.e., Baldwin County), nesting success fluctuated from 42.9% (+/- 3.7% SE) to 64.2% (+/- 4.0%) (Table 10). From 2011 to 2018, overall nesting success of 53.7%.  
+  
+```{r summary_nest_year, echo = FALSE}
+
+nestByYearMean <- as.data.frame(round(tapply(LNTdata$Success_Nest, list(LNTdata$Year), mean), 3))
+nestByYearSE <- as.data.frame(round(tapply(LNTdata$Success_Nest, list(LNTdata$Year), std.error), 3))
+nestByYearN <- as.data.frame(tapply(LNTdata$Success_Nest, list(LNTdata$Year), length))
+#nestByYearMean
+#nestByYearSE
+#nestByYearN
+
+kable(cbind(Year = seq(from = 2011, to = 2018, by = 1), Mean = unname(nestByYearMean[,1]), SE = unname(nestByYearSE[,1]), N = 
+              unname(nestByYearN[,1])), caption = "Table 10. County-wide nesting success by year")
+
+```
+  
+There is a slight negative trend in nesting success in mainland Alabama from 2011 to 2018 (~1%), though it is not statistically significant.  
+  
+```{r plot_nestSuccess_years, echo = FALSE}
+
+years <- seq(from = 2011, to = 2018, by = 1)
+
+lmNS <- glm(Success_Nest ~ Year, data = LNTdata, family = "binomial")
+lmNS_Predict <- predict(lmNS, newdata = list(Year = years), se.fit = TRUE)
+
+summary(lmNS)
+
+plot(years, nestByYearMean$`round(tapply(LNTdata$Success_Nest, list(LNTdata$Year), mean), `, type = "l", col = "black", lwd = 2, xlab = "Year", 
+     ylim = c(0.2, 1), ylab = "Nesting Success", main = "County-wide Nesting Success")
+arrows(years, nestByYearMean$`round(tapply(LNTdata$Success_Nest, list(LNTdata$Year), mean), ` - 
+         nestByYearSE$`round(tapply(LNTdata$Success_Nest, list(LNTdata$Year), std.error), `, 
+       years, nestByYearMean$`round(tapply(LNTdata$Success_Nest, list(LNTdata$Year), mean), ` + 
+         nestByYearSE$`round(tapply(LNTdata$Success_Nest, list(LNTdata$Year), std.error), `, 
+       length = 0.05, angle = 90, code = 3)
+lines(years, plogis(lmNS_Predict$fit), lwd = 1, lty = 1, col = "red")
+lines(years, plogis(lmNS_Predict$fit+(1.96*lmNS_Predict$se.fit)), lwd = 1, lty = 2, col = "red")
+lines(years, plogis(lmNS_Predict$fit-(1.96*lmNS_Predict$se.fit)), lwd = 1, lty = 2, col = "red")
+
+```
+  
+*By Beach Section*  
+  
+From 2011 to 2018, nesting success fluctuated between 43.1 (+/- 6.2% SE) and 76.2 (+/- 9.5% SE) for the BSNWR, 39.1 (+/- 6.1% SE) and 70.6 (+/- 7.9% SE) for Fort Morgan, 45.9 (+/- 8.3% SE) and 73.1 (+/- 6.2% SE) for Gulf Shores, 33.3 (+/- 10.5% SE) and 100 (+/- 0.0% SE) for Gulf State Park, and 43.5 (+/- 6.3% SE) and 61.8 (+/- 8.5% SE) for Orange Beach (Table 11).  
+  
+```{r summary_nest_year_region, echo = FALSE}
+
+nestByYearMeanRegion <- as.data.frame(round(tapply(LNTdata$Success_Nest, list(LNTdata$Year, LNTdata$Region), mean), 3))
+nestByYearSERegion <- as.data.frame(round(tapply(LNTdata$Success_Nest, list(LNTdata$Year, LNTdata$Region), std.error), 3))
+nestByYearNRegion <- as.data.frame(tapply(LNTdata$Success_Nest, list(LNTdata$Year, LNTdata$Region), length))
+#nestByYearMeanRegion
+#nestByYearSERegion
+#nestByYearNRegion
+
+nestByYearRegion <- matrix(rep(NA, 48), nrow = 8, ncol = 6)
+for(i in 1:8){
+  for(j in 1:6){
+    nestByYearRegion[i,j] <- paste0(unname(nestByYearMeanRegion[i,j]), " (+/- ", unname(nestByYearSERegion[i,j]), ", n = ", 
+                                    unname(nestByYearNRegion[i,j]), ")")
+  }
+}
+colnames(nestByYearRegion) <- c("BSNWR", "Dauphin Island", "Fort Morgan", "Gulf Shores", "Gulf State Park", "Orange Beach")
+
+kable(cbind(Year = seq(from = 2011, to = 2018, by = 1), nestByYearRegion[,-2]), caption = "Table 11. Nesting success by beach section per year")
+
+```
+  
+When broken down by beach section, the variability in nesting success within the Bon Secour National Wildlife Refuge and Gulf State Park is particularly evident.  
+  
+```{r plot_nest_years_region, echo = FALSE}
+
+plot(years, nestByYearMeanRegion$BSNWR, type = "l", col = "black", lwd = 2, xlab = "Year", ylim = c(0.2, 1), ylab = "Nesting Success", 
+     main = "Nesting Success by Beach Section")
+#arrows(years, nestByYearMeanRegion$BSNWR - nestByYearSERegion$BSNWR, years, nestByYearMeanRegion$BSNWR + nestByYearSERegion$BSNWR, 
+       #length = 0.05, angle = 90, code = 3)
+lines(years, nestByYearMeanRegion$`Fort Morgan`, lwd = 2, col = "red")
+#arrows(years, nestByYearMeanRegion$`Fort Morgan` - nestByYearSERegion$`Fort Morgan`, years, nestByYearMeanRegion$`Fort Morgan` + 
+         #nestByYearSERegion$`Fort Morgan`, col = "red", length = 0.05, angle = 90, code = 3)
+lines(years, nestByYearMeanRegion$`Gulf Shores`, lwd = 2, col = "blue")
+#arrows(years, nestByYearMeanRegion$`Gulf Shores` - nestByYearSERegion$`Gulf Shores`, years, nestByYearMeanRegion$`Gulf Shores` + 
+         #nestByYearSERegion$`Gulf Shores`, col = "blue", length = 0.05, angle = 90, code = 3)
+lines(years, nestByYearMeanRegion$`Gulf State Park`, lwd = 2, col = "darkgreen")
+#arrows(years, nestByYearMeanRegion$`Gulf State Park` - nestByYearSERegion$`Gulf State Park`, years, nestByYearMeanRegion$`Gulf State Park` + 
+         #nestByYearSERegion$`Gulf State Park`, col = "darkgreen", length = 0.05, angle = 90, code = 3)
+lines(years, nestByYearMeanRegion$`Orange Beach`, lwd = 2, col = "darkgrey")
+#arrows(years, nestByYearMeanRegion$`Orange Beach` - nestByYearSERegion$`Orange Beach`, years, nestByYearMeanRegion$`Orange Beach` + 
+         #nestByYearSERegion$`Orange Beach`, col = "darkgrey", length = 0.05, angle = 90, code = 3)
+legend("topright", legend = c("BSNWR", "Fort Morgan", "Gulf Shores", "Gulf State Park", "Orange Beach"), 
+       col = c("black", "red", "blue", "darkgreen", "darkgrey"), lty = c(1, 1, 1, 1, 1), bty = "n")
+
+```
+  
+When broken down by section, before the ordinance Gulf Shores had the highest nesting success (62.0 +/- 3.6%), followed by Gulf State Park (61.5 +/- 7.9%), the BSNWR (57.9 +/- 3.5%), Fort Morgan (53.2 +/- 3.0%), and Orange Beach (52.4 +/- 4.2%) (Table 12).  
+After the ordinance, Fort Morgan had the highest nesting success (54.3 +/- 3.4%), followed by the BSNWR (53.6 +/- 3.7%), Gulf Shores (51.1 +/- 3.4%), then Orange Beach (45.8 +/- 3.7%) and Gulf State Park (45.8 +/- 6.5%).  
+  
+```{r summary_general_nest1, echo = FALSE}
+
+#length(LNTdata$Success_Nest); round(sum(LNTdata$Success_Nest)/length(LNTdata$Success_Nest), 3)
+
+#round(tapply(LNTdata$Success_Nest, list(LNTdata$Pre_Post, LNTdata$Region), mean), 3)
+#round(tapply(LNTdata$Success_Nest, list(LNTdata$Pre_Post, LNTdata$Region), std.error), 3)
+kable(cbind(Time = c("Pre-Ordinance", "Post-Ordinance"),
+            "BSNWR" = c("0.579 (+/- 0.035)", "0.536 (+/- 0.037"),
+            "Fort Morgan" = c("0.532 (+/- 0.030)", "0.543 (+/- 0.034)"),
+            "Gulf Shores" = c("0.620 (+/- 0.036)", "0.511 (+/- 0.036)"),
+            "Gulf State Park" = c("0.615 (+/- 0.079)", "0.458 (+/- 0.065)"),
+            "Orange Beach" = c("0.524 (+/- 0.041)", "0.458 (+/- 0.037)")), 
+      caption = "Table 12. Nesting success (+/-1 SE) by beach section before and after ordinance implementation")
+
+```
+  
+*By Treatment Group*  
+  
+From 2011 to 2018, nesting success fluctuated between 45.3 (+/- 5.8% SE) and 68.0 (+/- 5.4% SE) for the Treatment group, 40.7 (+/- 5.3% SE) and 78.3 (+/- 8.8% SE) for the Control for Ordinance, and 39.1 (+/- 6.1% SE) and 70.6 (+/- 7.9% SE) for the Control for Population (Table 13).  
+  
+```{r summary_nest_year_group, echo = FALSE}
+
+nestByYearMeanGroup <- as.data.frame(round(tapply(LNTdata$Success_Nest, list(LNTdata$Year, LNTdata$Group), mean), 3))
+nestByYearSEGroup <- as.data.frame(round(tapply(LNTdata$Success_Nest, list(LNTdata$Year, LNTdata$Group), std.error), 3))
+nestByYearNGroup<- as.data.frame(tapply(LNTdata$Success_Nest, list(LNTdata$Year, LNTdata$Group), length))
+#nestByYearMeanGroup
+#nestByYearSEGroup
+#nestByYearNGroup
+
+nestByYearGroup <- matrix(rep(NA, 24), nrow = 8, ncol = 3)
+for(i in 1:8){
+  for(j in 1:3){
+    nestByYearGroup[i,j] <- paste0(unname(nestByYearMeanGroup[i,j]), " (+/- ", unname(nestByYearSEGroup[i,j]), ", n = ", unname(nestByYearNGroup[i,j]), ")")
+  }
+}
+colnames(nestByYearGroup) <- c("Control for Ordinance", "Control for Population", "Treatment")
+
+kable(cbind(Year = seq(from = 2011, to = 2018, by = 1), nestByYearGroup), caption = "Table 13. Nesting success by treatment group per year")
+
+```
+  
+Nesting success within each treatment group is highly variable across time, particularly within the Control for Ordinance group.  
+  
+```{r plot_nest_years_group, echo = FALSE}
+
+plot(years, nestByYearMeanGroup$Ord_Control, type = "l", col = "black", lwd = 2, xlab = "Year", ylim = c(0.2, 1), ylab = "Nesting Success", 
+     main = "Nesting Success by Group")
+#arrows(years, nestByYearMeanGroup$Ord_Control - nestByYearSEGroup$Ord_Control, years, nestByYearMeanGroup$Ord_Control + nestByYearSEGroup$Ord_Control, 
+       #length = 0.05, angle = 90, code = 3)
+lines(years, nestByYearMeanGroup$Pop_Control, lwd = 2, col = "red")
+#arrows(years, nestByYearMeanGroup$Pop_Control - nestByYearSEGroup$Pop_Control, years, nestByYearMeanGroup$Pop_Control + nestByYearSEGroup$Pop_Control, 
+      # col = "red", length = 0.05, angle = 90, code = 3)
+lines(years, nestByYearMeanGroup$Treatment, lwd = 2, col = "blue")
+#arrows(years, nestByYearMeanGroup$Treatment - nestByYearSEGroup$Treatment, years, nestByYearMeanGroup$Treatment + nestByYearSEGroup$Treatment, 
+       #col = "blue", length = 0.05, angle = 90, code = 3)
+legend("topright", legend = c("Treatment", "Control for Population", "Control for Ordinance"), col = c("blue", "red", "black"), lty = c(1, 1, 1), 
+       bty = "n")
+
+```
+  
+Before the ordinance went into effect, nesting success was highest in the Control for Ordinance group (58.5% +/- 3.2%), followed by Treatment (57.7% +/- 2.7%), and Control for Population groups (53.2% +/- 3.0%) (Table 14).  
+After the ordinance, nesting success was highest in Control for Population (54.3% +/- 3.4%), followed by Control for Ordinance (51.7% +/- 3.2%), then Treatment (48.7% +/- 2.5%).  
+  
+```{r summary_general_nest2, echo = FALSE}
+
+#round(tapply(LNTdata$Success_Nest, list(LNTdata$Pre_Post, LNTdata$Group), mean), 3)
+#round(tapply(LNTdata$Success_Nest, list(LNTdata$Pre_Post, LNTdata$Group), std.error), 3)
+kable(cbind(Time = c("Pre-Ordinance", "Post-Ordinance"),
+            "Control for Ordinance" = c("0.585 (+/- 0.032)", "0.517 (+/- 0.032)"),
+            "Control for Population" = c("0.532 (+/- 0.030)", "0.543 (+/- 0.034)"),
+            "Treatment" = c("0.577 (+/- 0.027)", "0.587 (+/- 0.025)")), 
+      caption = "Table 14. Nesting success (+/-1 SE) by treatment group before and after ordinance implementation")
+
+```
+  
+**Statistical Tests**  
+  
+A logistic regression was run to determine nesting success by Treatment Group, Time (pre/post-ordinance), Interaction with an obstruction, and Distance to the high tide line (HTL).  
+  
+In logistic regression, the log odds are a function of the predictor variables in ...  
+  
+$log(\frac{Successes}{Failures}) = \beta_{0} + \beta_{1}Var_{1} + ... + \beta_{x}Var_{x}$  
+  
+Converted into probability, this is ... 
+  
+$Prob = \frac{1}{1 + exp(-(\beta_{0} + \beta_{1}Var_{1} + ... + \beta_{x}Var_{x}))}$  
+  
+From the full model, there is no statistically significant difference by treatment group (Treatment vs. Control for Ordinance vs. Control for Population), nor presence of an obstruction. Time (Pre- vs. Post-Ordinance Implementation) and distance to the HTL are significant. There was no significant interaction between treatment group and time. 
+  
+```{r logreg_nest_full, echo = FALSE}
+
+LNTdata$Dist_HTL <- as.numeric(LNTdata$Dist_HTL)
+nest1_Full <- glm(Success_Nest ~ Group * Pre_Post + Obstructed + Dist_HTL, data = LNTdata, family = "binomial")
+anova(nest1_Full, test = "Chisq")
+summary(nest1_Full)
+
+```
+  
+Removing Group and Obstruction from the full model does not significantly improve the model fit.  
+  
+Under the reduced model, the probability of nesting success equals ...  
+  
+$NS = \frac{1}{1 + exp(-1.632 + 1.837PostOrdinance - 0.025Dist_{HTL})}$  
+  
+where $PostOrdinance$ equals 1 if the crawl occurred after 2015 (otherwise, it equals 0), and $Dist_{HTL}$ equals the distance from the previous night's high tide line (in meters).  
+  
+```{r logreg_nest_red, echo = FALSE}
+
+nest1_Red1 <- glm(Success_Nest ~ Pre_Post + Dist_HTL, data = LNTdata, family = "binomial")
+anova(nest1_Red1, test = "Chisq")
+summary(nest1_Red1)
+
+anova(nest1_Full, nest1_Red1, test = "Chisq")
+
+```
+  
+```{r logreg_nest_plot, echo = FALSE}
+
+nsMean <- tapply(LNTdata$Success_Nest, list(LNTdata$Pre_Post), mean, na.rm = TRUE)
+nsSE <- tapply(LNTdata$Success_Nest, list(LNTdata$Pre_Post), std.error, na.rm = TRUE)
+nsTable <- as.data.frame(cbind(Time = c("Pre", "Post"), Mean = nsMean, SE = nsSE))
+#nsTable
+
+distHTL <- seq(from = 0, to = max(LNTdata$Dist_HTL, na.rm = TRUE), by = 2)
+nsHTL <- glm(Success_Nest ~ Dist_HTL, data = LNTdata, family = "binomial")
+nsHTL_Predict <- predict(nsHTL, newdata = list(Dist_HTL = distHTL), se.fit = TRUE)
+
+#jpeg("ISTS 2019 Leave No Trace Figure 2 nest success by time and distance to HTL.jpg", width = 7, height = 4, units = "in", res = 300)
+#windows(7,4)
+par(mfrow = c(1,2), family = "serif", mar = c(4.5, 4.5, 2.5, 0.5))
+plotTime <- barplot(nsMean, names.arg = c("Pre", "Post"), xlab = "Pre- vs. Post-Ordinance", ylab = "Nesting Success", ylim = c(0, 1), cex.axis = 1.2,
+                    cex.lab = 1.2, cex.names = 1.2)
+arrows(plotTime, nsMean - nsSE, plotTime, nsMean + nsSE, lwd = 2, angle = 90, length = 0.1, code = 3)
+mtext("A.", side = 3, outer = FALSE, line = 1, adj = 0, cex = 1.2)
+plot(LNTdata$Dist_HTL, LNTdata$Success_Nest, xlab = "Distance to HTL (m)", ylab = "Nesting Success", cex.axis = 1.2, cex.lab = 1.2)
+lines(distHTL, plogis(nsHTL_Predict$fit), col = "red", lwd = 2, lty = 1)
+lines(distHTL, plogis(nsHTL_Predict$fit+(1.96*nsHTL_Predict$se.fit)), lwd = 1, lty = 2, col = "red")
+lines(distHTL, plogis(nsHTL_Predict$fit-(1.96*nsHTL_Predict$se.fit)), lwd = 1, lty = 2, col = "red")
+mtext("B.", side = 3, outer = FALSE, line = 1, adj = 0, cex = 1.2)
+#dev.off()
+
+```
+  
+***
+  
+### Obstructed Crawls  
+  
+*County-wide*  
+  
+From 2011 to 2018, there were 275 crawls observed on mainland Alabama, with an overall obstruction percentage of 16.4%. Across mainland Alabama, obstructed crawl frequencies varied from 11.5% (+/- 2.4% SE) to 19.7% (+/- 2.6% SE) (Table 15).  
+  
+```{r summary_obst_year, echo = FALSE}
+
+obstByYearMean <- as.data.frame(round(tapply(LNTdata$Obstructed, list(LNTdata$Year), mean), 3))
+obstByYearSE <- as.data.frame(round(tapply(LNTdata$Obstructed, list(LNTdata$Year), std.error), 3))
+obstByYearN <- as.data.frame(tapply(LNTdata$Obstructed, list(LNTdata$Year), length))
+#obstByYearMean
+#obstByYearSE
+#obstByYearN
+
+kable(cbind(Year = seq(from = 2011, to = 2018, by = 1), Mean = unname(obstByYearMean[,1]), SE = unname(obstByYearSE[,1]), N = 
+              unname(obstByYearN[,1])), caption = "Table 15. Proportion of obstructed crawls County-wide by year")
+
+```
+  
+There is no overall trend in obstructed crawl frequencies across mainland Alabama from 2011 to 2018.  
+  
+```{r plot_obst_years, echo = FALSE}
+
+lmOB <- glm(Obstructed ~ Year, data = LNTdata, family = "binomial")
+lmOB_Predict <- predict(lmOB, newdata = list(Year = years), se.fit = TRUE)
+
+summary(lmOB)
+
+plot(years, obstByYearMean$`round(tapply(LNTdata$Obstructed, list(LNTdata$Year), mean), `, type = "l", col = "black", lwd = 2, xlab = "Year", 
+     ylim = c(0.0, 0.4), ylab = "Proportion of Obstructed Crawls", main = "County-wide Obstruction Proportion")
+arrows(years, obstByYearMean$`round(tapply(LNTdata$Obstructed, list(LNTdata$Year), mean), ` - 
+         obstByYearSE$`round(tapply(LNTdata$Obstructed, list(LNTdata$Year), std.error), `, 
+       years, obstByYearMean$`round(tapply(LNTdata$Obstructed, list(LNTdata$Year), mean), ` + 
+         obstByYearSE$`round(tapply(LNTdata$Obstructed, list(LNTdata$Year), std.error), `, 
+       length = 0.05, angle = 90, code = 3)
+lines(years, plogis(lmOB_Predict$fit), lwd = 1, lty = 1, col = "red")
+lines(years, plogis(lmOB_Predict$fit+(1.96*lmOB_Predict$se.fit)), lwd = 1, lty = 2, col = "red")
+lines(years, plogis(lmOB_Predict$fit-(1.96*lmOB_Predict$se.fit)), lwd = 1, lty = 2, col = "red")
+
+```
+  
+*By Beach Section*  
+  
+From 2011 to 2018, obstruction percentage fluctuated between 3.2 (+/- 3.2% SE) and 13.0 (+/- 3.9% SE) for the BSNWR, 4.7 (+/- 2.7% SE) and 28.6 (+/- 7.7% SE) for Fort Morgan, 5.4 (+/- 2.4% SE) and 18.9 (+/- 6.5% SE) for Gulf Shores, 0.0 (+/- 0.0% SE) and 50.0 (+/- 50.0% SE) for Gulf State Park, and 16.7 (+/- 7.8% SE) and 42.1 (+/- 5.7% SE) for Orange Beach (Table 16).  
+  
+```{r summary_obst_year_region, echo = FALSE}
+
+obstByYearMeanRegion <- as.data.frame(round(tapply(LNTdata$Obstructed, list(LNTdata$Year, LNTdata$Region), mean), 3))
+obstByYearSERegion <- as.data.frame(round(tapply(LNTdata$Obstructed, list(LNTdata$Year, LNTdata$Region), std.error), 3))
+obstByYearNRegion <- as.data.frame(tapply(LNTdata$Obstructed, list(LNTdata$Year, LNTdata$Region), length))
+#obstByYearMeanRegion
+#obstByYearSERegion
+#obstByYearNRegion
+
+obstByYearRegion <- matrix(rep(NA, 48), nrow = 8, ncol = 6)
+for(i in 1:8){
+  for(j in 1:6){
+    obstByYearRegion[i,j] <- paste0(unname(obstByYearMeanRegion[i,j]), " (+/- ", unname(obstByYearSERegion[i,j]), ", n = ", 
+                                    unname(obstByYearNRegion[i,j]), ")")
+  }
+}
+colnames(obstByYearRegion) <- c("BSNWR", "Dauphin Island", "Fort Morgan", "Gulf Shores", "Gulf State Park", "Orange Beach")
+
+kable(cbind(Year = seq(from = 2011, to = 2018, by = 1), obstByYearRegion[,-2]), 
+      caption = "Table 16. Proportion of obstructed crawls by beach section per year")
+
+```
+  
+When broken down by beach section, Orange Beach has a consistently higher proportion of obstructed crawls than the other sections. The proportion of obstructed crawls at Gulf State Park can be highly variable due to the small number of nests laid in this beach section per year (n = 12.25 nests per year, on average). For example, the peak year in Gulf State Park had only 2 nests that year. Starting in 2016, Gulf Shores is essentially equivalent to the Bon Secour NWR and Gulf State Park.  
+  
+```{r plot_obst_years_region, echo = FALSE}
+
+plot(years, obstByYearMeanRegion$BSNWR, type = "l", col = "black", lwd = 2, xlab = "Year", ylim = c(0.0, 1), 
+     ylab = "Proportion of Obstructed Crawls", main = "Obstruction Proportion by Beach Section")
+#arrows(years, obstByYearMeanRegion$BSNWR - obstByYearSERegion$BSNWR, years, obstByYearMeanRegion$BSNWR + obstByYearSERegion$BSNWR, 
+       #length = 0.05, angle = 90, code = 3)
+lines(years, obstByYearMeanRegion$`Fort Morgan`, lwd = 2, col = "red")
+#arrows(years, obstByYearMeanRegion$`Fort Morgan` - obstByYearSERegion$`Fort Morgan`, years, obstByYearMeanRegion$`Fort Morgan` + 
+         #obstByYearSERegion$`Fort Morgan`, col = "red", length = 0.05, angle = 90, code = 3)
+lines(years, obstByYearMeanRegion$`Gulf Shores`, lwd = 2, col = "blue")
+#arrows(years, obstByYearMeanRegion$`Gulf Shores` - obstByYearSERegion$`Gulf Shores`, years, obstByYearMeanRegion$`Gulf Shores` + 
+         #obstByYearSERegion$`Gulf Shores`, col = "blue", length = 0.05, angle = 90, code = 3)
+lines(years, obstByYearMeanRegion$`Gulf State Park`, lwd = 2, col = "darkgreen")
+#arrows(years, obstByYearMeanRegion$`Gulf State Park` - obstByYearSERegion$`Gulf State Park`, years, obstByYearMeanRegion$`Gulf State Park` + 
+         #obstByYearSERegion$`Gulf State Park`, col = "darkgreen", length = 0.05, angle = 90, code = 3)
+lines(years, obstByYearMeanRegion$`Orange Beach`, lwd = 2, col = "darkgrey")
+#arrows(years, obstByYearMeanRegion$`Orange Beach` - obstByYearSERegion$`Orange Beach`, years, obstByYearMeanRegion$`Orange Beach` + 
+         #obstByYearSERegion$`Orange Beach`, col = "darkgrey", length = 0.05, angle = 90, code = 3)
+legend("topright", legend = c("BSNWR", "Fort Morgan", "Gulf Shores", "Gulf State Park", "Orange Beach"), 
+       col = c("black", "red", "blue", "darkgreen", "darkgrey"), lty = c(1, 1, 1, 1, 1), bty = "n")
+
+```
+  
+Before the ordinance, Orange Beach had the highest obstructed crawl percentage (28.6 +/- 3.7% SE), followed by Gulf Shores (16.8 +/- 2.8% SE), Fort Morgan (16.7 +/- 2.3% SE), the BSNWR (8.1 +/- 2.0% SE), then Gulf State Park (7.7 +/- 4.3% SE) (Table 17).  
+After the ordinance, Orange Beach still had the highest obstructed crawl percentage (30.7 +/- 3.5 SE), followed by Fort Morgan (24.3 +/- 3.0% SE), Gulf Shores (7.8 +/- 1.8% SE), the BSNWR (7.2 +/- 1.9% SE), then Gulf State Park (5.1 +/- 2.9% SE).  
+  
+```{r summary_general_obstruct1, echo = FALSE}
+
+#sum(LNTdata$Obstructed); round(sum(LNTdata$Obstructed)/length(LNTdata$Obstructed), 3)
+#round(tapply(LNTdata$Obstructed, list(LNTdata$Pre_Post, LNTdata$Group), mean), 3)
+#round(tapply(LNTdata$Obstructed, list(LNTdata$Pre_Post, LNTdata$Group), std.error), 3)
+kable(cbind(Time = c("Pre-Ordinance", "Post-Ordinance"),
+            "Control for Ordinance" = c("0.081 (+/- 0.018)", "0.067 (+/- 0.016)"),
+            "Control for Population" = c("0.167 (+/- 0.023)", "0.243 (+/- 0.030)"),
+            "Treatment" = c("0.221 (+/- 0.023)", "0.181 (+/- 0.019)")), 
+      caption = "Tale 17. Proportion of obstructed crawls (+/-1 SE) by treatment group before and after ordinance implementation")
+
+```
+  
+*By Treatment Group*  
+  
+From 2011 to 2018, obstruction percentage fluctuated between 12.3 (+/- 2.7% SE) and 28.3 (+/- 5.9% SE) for the Treatment group, 2.3 (+/- 2.3% SE) and 13.6 (+/- 3.7% SE) for the Control for Ordinance group, and 4.7 (+/- 4.8% SE) and 28.6 (+/- 7.7% SE) for Control for Population (Table 18).  
+  
+```{r summary_obst_year_group, echo = FALSE}
+
+obstByYearMeanGroup <- as.data.frame(round(tapply(LNTdata$Obstructed, list(LNTdata$Year, LNTdata$Group), mean), 3))
+obstByYearSEGroup <- as.data.frame(round(tapply(LNTdata$Obstructed, list(LNTdata$Year, LNTdata$Group), std.error), 3))
+obstByYearNGroup<- as.data.frame(tapply(LNTdata$Obstructed, list(LNTdata$Year, LNTdata$Group), length))
+#obstByYearMeanGroup
+#obstByYearSEGroup
+#obstByYearNGroup
+
+obstByYearGroup <- matrix(rep(NA, 24), nrow = 8, ncol = 3)
+for(i in 1:8){
+  for(j in 1:3){
+    obstByYearGroup[i,j] <- paste0(unname(obstByYearMeanGroup[i,j]), " (+/- ", unname(obstByYearSEGroup[i,j]), ", n = ", unname(obstByYearNGroup[i,j]), ")")
+  }
+}
+colnames(obstByYearGroup) <- c("Control for Ordinance", "Control for Population", "Treatment")
+
+kable(cbind(Year = seq(from = 2011, to = 2018, by = 1), obstByYearGroup), 
+      caption = "Table 18. Proportion of obstructed crawls by treatment group per year")
+
+```
+  
+When broken down by treatment group, there is a noticeable decline in the frequency of obstructions in the Gulf Shores/Orange Beach (i.e., Treatment) starting after 2015. Meanwhile, Fort Morgan (i.e., Control for Population) has seen an increasing trend starting after 2013. The Bon Secour NWR and Gulf State Park (i.e., Control for Ordinance) have a consistently smaller proportion of obstructed crawls.  
+  
+```{r plot_obst_years_group, echo = FALSE}
+
+plot(years, obstByYearMeanGroup$Ord_Control, type = "l", col = "black", lwd = 2, xlab = "Year", ylim = c(0.0, 0.5), 
+     ylab = "Proportion of Obstructed Crawls", main = "Obstruction Proportion by Group")
+#arrows(years, obstByYearMeanGroup$Ord_Control - obstByYearSEGroup$Ord_Control, years, obstByYearMeanGroup$Ord_Control + obstByYearSEGroup$Ord_Control, 
+       #length = 0.05, angle = 90, code = 3)
+lines(years, obstByYearMeanGroup$Pop_Control, lwd = 2, col = "red")
+#arrows(years, obstByYearMeanGroup$Pop_Control - obstByYearSEGroup$Pop_Control, years, obstByYearMeanGroup$Pop_Control + obstByYearSEGroup$Pop_Control, 
+       #col = "red", length = 0.05, angle = 90, code = 3)
+lines(years, obstByYearMeanGroup$Treatment, lwd = 2, col = "blue")
+#arrows(years, obstByYearMeanGroup$Treatment - obstByYearSEGroup$Treatment, years, obstByYearMeanGroup$Treatment + obstByYearSEGroup$Treatment, 
+       #col = "blue", length = 0.05, angle = 90, code = 3)
+legend("topright", legend = c("Treatment", "Control for Population", "Control for Ordinance"), col = c("blue", "red", "black"), lty = c(1, 1, 1), 
+       bty = "n")
+
+```
+  
+```{r plot_obst_step, include = FALSE}
+
+preYears <- seq(from = 2011, to = 2015, by = 1)
+postYears <- seq(from = 2016, to = 2018, by = 1)
+
+prePop <- LNTdata[which(LNTdata$Pre_Post == "1_Pre" & LNTdata$Group == "Pop_Control"),]
+postPop <- LNTdata[which(LNTdata$Pre_Post == "2_Post" & LNTdata$Group == "Pop_Control"),]
+preTreat <- LNTdata[which(LNTdata$Pre_Post == "1_Pre" & LNTdata$Group == "Treatment"),]
+postTreat <- LNTdata[which(LNTdata$Pre_Post == "2_Post" & LNTdata$Group == "Treatment"),]
+
+lmPrePop <- glm(Obstructed ~ Year, data = prePop, family = "binomial")
+lmPostPop <- glm(Obstructed ~ Year, data = postPop, family = "binomial")
+lmPreTreat <- glm(Obstructed ~ Year, data = preTreat, family = "binomial")
+lmPostTreat <- glm(Obstructed ~ Year, data = postTreat, family = "binomial")
+
+lmPrePop_Predict <- predict(lmPrePop, newdata = list(Year = preYears), se.fit = TRUE)
+lmPostPop_Predict <- predict(lmPostPop, newdata = list(Year = postYears), se.fit = TRUE)
+lmPreTreat_Predict <- predict(lmPreTreat, newdata = list(Year = preYears), se.fit = TRUE)
+lmPostTreat_Predict <- predict(lmPostTreat, newdata = list(Year = postYears), se.fit = TRUE)
+
+plot(years, obstByYearMeanGroup$Pop_Control, type = "l", col = "red", lwd = 1, xlab = "Year", ylim = c(0.0, 0.5), 
+     ylab = "Proportion of Obstructed Crawls", main = "")
+lines(preYears, plogis(lmPrePop_Predict$fit), lwd = 2, lty = 2, col = "red")
+#lines(preYears, plogis(lmPrePop_Predict$fit+(1.96*lmPrePop_Predict$se.fit)), lwd = 2, lty = 3, col = "red")
+#lines(preYears, plogis(lmPrePop_Predict$fit-(1.96*lmPrePop_Predict$se.fit)), lwd = 2, lty = 3, col = "red")
+lines(postYears, plogis(lmPostPop_Predict$fit), lwd = 2, lty = 2, col = "red")
+#lines(postYears, plogis(lmPostPop_Predict$fit+(1.96*lmPostPop_Predict$se.fit)), lwd = 2, lty = 3, col = "red")
+#lines(postYears, plogis(lmPostPop_Predict$fit-(1.96*lmPostPop_Predict$se.fit)), lwd = 2, lty = 3, col = "red")
+lines(years, obstByYearMeanGroup$Treatment, lwd = 1, col = "blue")
+lines(preYears, plogis(lmPreTreat_Predict$fit), lwd = 2, lty = 2, col = "blue")
+#lines(preYears, plogis(lmPreTreat_Predict$fit+(1.96*lmPreTreat_Predict$se.fit)), lwd = 2, lty = 3, col = "blue")
+#lines(preYears, plogis(lmPreTreat_Predict$fit-(1.96*lmPreTreat_Predict$se.fit)), lwd = 2, lty = 3, col = "blue")
+lines(postYears, plogis(lmPostTreat_Predict$fit), lwd = 2, lty = 2, col = "blue")
+#lines(postYears, plogis(lmPostTreat_Predict$fit+(1.96*lmPostTreat_Predict$se.fit)), lwd = 2, lty = 3, col = "blue")
+#lines(postYears, plogis(lmPostTreat_Predict$fit-(1.96*lmPostTreat_Predict$se.fit)), lwd = 2, lty = 3, col = "blue")
+legend("topright", legend = c("Gulf Shores/Orange Beach", "GS/OB Trend", "Fort Morgan", "FM Trend"), col = c("blue", "blue", "red", "red"), 
+       lty = c(1, 2, 1, 2), bty = "n")
+
+```
+  
+Before the ordinance, the Treatment group had the highest percentage of obstructed crawls (22.1% +/- 2.3% SE), followed by Control for Population (16.7% +/- 2.3% SE) then the Control for Ordinance (8.1% +/- 1.8% SE) (Table 19).  
+After the ordinance, Control for Population had the highest percentage of obstructed crawls (24.3% +/- 3.0% SE), followed by Treatment (18.1% +/- 1.9% SE), then the Control for Ordinance (6.7% +/- 1.6% SE).  
+  
+```{r summary_general_obstruct2, echo = FALSE}
+
+#round(tapply(LNTdata$Obstructed, list(LNTdata$Pre_Post, LNTdata$Region), mean), 3)
+#round(tapply(LNTdata$Obstructed, list(LNTdata$Pre_Post, LNTdata$Region), std.error), 3)
+kable(cbind(Time = c("Pre-Ordinance", "Post-Ordinance"),
+            "BSNWR" = c("0.081 (+/- 0.020)", "0.072 (+/- 0.019"),
+            "Fort Morgan" = c("0.167 (+/- 0.023)", "0.243 (+/- 0.030)"),
+            "Gulf Shores" = c("0.168 (+/- 0.028)", "0.078 (+/- 0.018)"),
+            "Gulf State Park" = c("0.077 (+/- 0.043)", "0.051 (+/- 0.029)"),
+            "Orange Beach" = c("0.286 (+/- 0.037)", "0.307 (+/- 0.035)")), 
+      caption = "Table 19. Proportion of obstructed crawls (+/-1 SE) by beach section before and after ordinance implementation")
+
+```
+  
+**Statistical Tests**  
+  
+From the full model, there is no statistically significant difference by time in the probability of an obstructed crawl. Distance to the HTL is significant, as is treatment group (Treatment and Control for Population are both different from Control for Ordinance). There was no significant interaction between treatment group and time.  
+  
+```{r logreg_obst_full, echo = FALSE}
+
+obst1_Full <- glm(Obstructed ~ Group * Pre_Post + Dist_HTL, data = LNTdata, family = "binomial")
+anova(obst1_Full, test = "Chisq")
+summary(obst1_Full)
+
+```
+  
+Removing time from the full model does not significantly improve the model fit.  
+  
+Under the reduced model, the probability of a crawl interacting with an obstruction equals ...  
+  
+$Prob_{Obst} = \frac{1}{1 + exp(3.035 - 1.436Control_{Pop} - 1.263Treatment - 0.030Dist_{HTL})}$  
+  
+where $Control_{Pop}$ equals 1 if the crawl occurred in Fort Morgan (otherwise, it equals 0), $Treatment$ equals 1 if the crawl occurred in Gulf Shores or Orange Beach (otherwise, it equals 0), and $Dist_{HTL}$ equals the distance from the previous night's high tide line (in meters).  
+  
+```{r logreg_obst_red, echo = FALSE}
+
+obst1_Red1 <- glm(Obstructed ~ Group + Dist_HTL, data = LNTdata, family = "binomial")
+anova(obst1_Red1, test = "Chisq")
+summary(obst1_Red1)
+
+anova(obst1_Full, obst1_Red1, test = "Chisq")
+
+```
+  
+```{r logreg_obst_plot, echo = FALSE, fig.width = 8, fig.height = 4}
+
+obMean <- tapply(LNTdata$Obstructed, list(LNTdata$Group), mean, na.rm = TRUE)
+obSE <- tapply(LNTdata$Obstructed, list(LNTdata$Group), std.error, na.rm = TRUE)
+obTable <- as.data.frame(cbind(Group = c("BSNWR/GSP", "Fort Morgan", "GS/OB"), Mean = obMean, SE = obSE))
+#obTable
+
+obHTL <- glm(Obstructed ~ Dist_HTL, data = LNTdata, family = "binomial")
+obHTL_Predict <- predict(obHTL, newdata = list(Dist_HTL = distHTL), se.fit = TRUE)
+
+#jpeg("ISTS 2019 Leave No Trace Figure 3 obstructions by treatment and distance to HTL.jpg", width = 8, height = 4, units = "in", res = 300)
+#windows(8,4)
+par(mfrow = c(1,2), family = "serif", mar = c(4.5, 5.5, 2.5, 0.5))
+plotGroup <- barplot(obMean, names.arg = c("Control\nOrd", "Control\nPop", "Treatment"), xlab = "Treatment Group", 
+                     ylab = "Proportion of\nObstructed Crawls", ylim = c(0, 0.25), cex.axis = 1.2, cex.lab = 1.2, cex.names = 1.1,
+                     col = c(rgb(255, 0, 0, maxColorValue = 255), rgb(255, 255, 191, maxColorValue = 255), rgb(0, 111, 255, maxColorValue = 255)))
+arrows(plotGroup, obMean - obSE, plotGroup, obMean + obSE, lwd = 2, angle = 90, length = 0.1, code = 3)
+mtext("A.", side = 3, outer = FALSE, line = 1, adj = 0, cex = 1.2)
+plot(LNTdata$Dist_HTL, LNTdata$Obstructed, xlab = "Distance to HTL (m)", ylab = "Proportion of\nObstructed Crawls", cex.axis = 1.2, cex.lab = 1.2)
+lines(distHTL, plogis(obHTL_Predict$fit), col = "red", lwd = 2, lty = 1)
+lines(distHTL, plogis(obHTL_Predict$fit+(1.96*obHTL_Predict$se.fit)), lwd = 1, lty = 2, col = "red")
+lines(distHTL, plogis(obHTL_Predict$fit-(1.96*obHTL_Predict$se.fit)), lwd = 1, lty = 2, col = "red")
+mtext("B.", side = 3, outer = FALSE, line = 1, adj = 0, cex = 1.2)
+#dev.off()
+
+```
+  
+### Are obstructed nests closer to the HTL?  
+  
+Previous literature suggests that obstructed nests tend to be closer to the high tide line than their unobstructed counterparts. In Baldwin County, obstructed nests are, on average, 2.6 m further from the HTL than unobstructed nests (Table 20). Though this is statistically significant (p = 0.008), obstructions explain almost essentially 0% of variation in distance to HTL.  
+  
+```{r nest_HTL, echo = FALSE}
+
+nests <- LNTdata[LNTdata$Success_Nest == 1,]
+
+#tapply(nests$Dist_HTL, list(nests$Obstructed), mean, na.rm = TRUE)
+#tapply(nests$Dist_HTL, list(nests$Obstructed), std.error, na.rm = TRUE)
+#tapply(nests$Dist_HTL, list(nests$Obstructed), length)
+
+kable(cbind("Obstructed?" = c("No", "Yes"), "Mean" = c(13.50, 16.15), "SE" = c(0.43, 0.87), "N" = c(741, 160)), 
+      caption = "Table 20. Mean distance to the HTL by presence of an obstruction")
+
+nestsHTL <- lm(Dist_HTL ~ as.factor(Obstructed), data = nests)
+summary(nestsHTL)
+
+plot(as.factor(nests$Obstructed), nests$Dist_HTL, xlab = "Obstructed", ylab = "Distance to HTL (m)", main = "")
+
+```
+  
+***
+  
+## Frequency of Obstructing Objects  
+  
+Of the 275 obstructed crawls (340 obstructing objects) from 2011 to 2018, the most common identified obstructions were tents (n = 56, 16.5%), wooden loungers (n = 49, 14.4%), and chairs (n = 44, 12.9%) (Table 21).  
+  
+```{r total_obstructions, echo = FALSE}
+
+#summary(LNTdata$Object_ID_Gen)
+
+objectCount <- c(length(grep("Chair", LNTdata$Object_ID_Spec)), length(grep("Driftwood", LNTdata$Object_ID_Spec)),  
+                 length(grep("Hole", LNTdata$Object_ID_Spec)), length(grep("Sand Fenc", LNTdata$Object_ID_Spec)), 
+                 length(grep("Sign", LNTdata$Object_ID_Spec)), length(grep("Tent", LNTdata$Object_ID_Spec)), length(grep("Toy", LNTdata$Object_ID_Spec)), 
+                 length(grep("Umbrella", LNTdata$Object_ID_Spec)), length(grep("Unidentified", LNTdata$Object_ID_Spec)), 
+                 length(grep("Wooden Lounger", LNTdata$Object_ID_Spec)), 24)
+#sum(objectCount)
+
+objectName <- c("Chair", "Driftwood", "Hole", "Sand Fence", "Sign", "Tent", "Toys", "Umbrella", "Unidentified", "Wooden Lounger", "Other")
+
+objectTotals <- data.frame(Count = objectCount, Percent = round((objectCount/sum(objectCount)) * 100, 1))
+rownames(objectTotals) <- objectName
+kable(objectTotals, caption = "Table 21. Prevalence in obstructed crawls by object")
+
+```
+  
+Before the ordinance went into effect, 107 objects obstructed crawls in Baldwin County, Alabama. After the ordinance, this number increased to 183, a 71% increase relative to pre-ordinance levels (Tables 22 and 23). **However, any interpretation of trends through time of a particular type of obstructing object will be hampered by the large number/percentage of "Unidentified" obstructing objects in earlier years.**  
+  
+```{r obstructID_count_year, echo = FALSE}
+
+#summary(LNTdata[LNTdata$Year == 2018,]$Object_ID_Spec)
+
+objectCount2011 <- c(0, 0, 0, 0, 0, 0, 0, 0, 15, 0, 0)
+objectCount2012 <- c(0, 0, 0, 2, 0, 1, 0, 0, 38, 4, 2)
+objectCount2013 <- c(4, 0, 1, 0, 0, 3, 2, 4, 8, 6, 1)
+objectCount2014 <- c(2, 1, 0, 1, 0, 3, 2, 2, 14, 2, 1)
+objectCount2015 <- c(8, 4, 3, 0, 0, 10, 3, 3, 15, 2, 2)
+objectCount2016 <- c(8, 7, 7, 6, 3, 16, 2, 0, 6, 22, 6)
+objectCount2017 <- c(10, 2, 4, 0, 1, 12, 2, 1, 3, 7, 7)
+objectCount2018 <- c(11, 2, 7, 0, 5, 10, 6, 0, 0, 6, 4)
+
+objectsCountByYear <- data.frame("2011" = objectCount2011, "2012" = objectCount2012, "2013" = objectCount2013, 
+                            "2014" = objectCount2014, "2015" = objectCount2015, "2016" = objectCount2016, "2017" = objectCount2017, "2018" = objectCount2018)
+rownames(objectsCountByYear) <- objectName; colnames(objectsCountByYear) <- seq(from = 2011, to = 2018, by = 1)
+kable(objectsCountByYear, caption = "Table 22. Number of Obstructing Objects by Year and Category")
+
+#sum(objectsCountByYear[,c(3:5)]); sum(objectsCountByYear[,c(6:8)])
+
+```
+  
+```{r obstructID_perc_year, echo = FALSE}
+
+objectPerc2011 <- round((objectCount2011 / sum(objectCount2011)) * 100, 1)
+objectPerc2012 <- round((objectCount2012 / sum(objectCount2012)) * 100, 1)
+objectPerc2013 <- round((objectCount2013 / sum(objectCount2013)) * 100, 1)
+objectPerc2014 <- round((objectCount2014 / sum(objectCount2014)) * 100, 1)
+objectPerc2015 <- round((objectCount2015 / sum(objectCount2015)) * 100, 1)
+objectPerc2016 <- round((objectCount2016 / sum(objectCount2016)) * 100, 1)
+objectPerc2017 <- round((objectCount2017 / sum(objectCount2017)) * 100, 1)
+objectPerc2018 <- round((objectCount2018 / sum(objectCount2018)) * 100, 1)
+
+objectsPercByYear <- data.frame("2011" = objectPerc2011, "2012" = objectPerc2012, "2013" = objectPerc2013, 
+                            "2014" = objectPerc2014, "2015" = objectPerc2015, "2016" = objectPerc2016, "2017" = objectPerc2017, "2018" = objectPerc2018)
+rownames(objectsPercByYear) <- objectName; colnames(objectsPercByYear) <- seq(from = 2011, to = 2018, by = 1)
+kable(objectsPercByYear, caption = "Table 23. Proportion of Obstructing Objects by Year and Category")
+
+```
+  
+```{r obstructID_plot_year, echo = FALSE}
+
+plot(years, objectsPercByYear["Chair",], xlab = "Year", ylab = "Percentage of Obstructions", ylim = c(0, 40), main = "County-wide Objects Through Time", 
+     type = "l",
+     col = "black", lty = 1, lwd = 2)
+lines(years, objectsPercByYear["Tent",], col = "blue", lty = 1, lwd = 2)
+lines(years, objectsPercByYear["Umbrella",], col = "red", lty = 1, lwd = 2)
+lines(years, objectsPercByYear["Wooden Lounger",], col = "darkgreen", lty = 1, lwd = 2)
+legend("topright", legend = c("Chairs", "Tents", "Umbrellas", "Wooden Loungers"), col = c("black", "blue", "red", "darkgreen"), 
+       lty = c(1, 1, 1, 1), bty = "n")
+
+```
+  
+Excluding data from 2011 and 2012 due to the large proportion of "Unidentified" obstructing objects, only the average frequencies of "Toys" (barely), "Umbrellas", and "Unidentified" across the entire study area decreased after the Leave No Trace ordinance went into effect (Table 24). The decrease in "Unidentified" is due to increased reporting of the obstructing object through time.  
+  
+```{r obstructID_prepost, echo = FALSE, warning = FALSE, fig.width = 12, fig.height = 5}
+
+preAvg <- round(apply(objectsPercByYear[,c(3:5)], 1, mean), 1)
+preSE <- round(apply(objectsPercByYear[,c(3:5)], 1, std.error), 1)
+postAvg <- round(apply(objectsPercByYear[,c(6:8)], 1, mean), 1)
+postSE <- round(apply(objectsPercByYear[,c(6:8)], 1, std.error), 1)
+
+objIDPrePost <- data.frame("Pre Avg" = preAvg, "Pre SE" = preSE, "Post Avg" = postAvg, "Post SE" = postSE, "Difference" = postAvg - preAvg)
+kable(objIDPrePost, caption = "Table 24. Change in number of obstructing objects")
+
+plotObjIDPrePost <- as.data.frame(cbind("Pre Avg" = c(13.7, 12.3, 10.6, 9.0, 6.7, 3.9, 3.1, 1.2, 0.0, 3.7, 35.9),
+                                        "Pre SE" = c(3.2, 2.7, 5.1, 2.4, 0.3, 2.3, 1.7, 1.2, 0.0, 0.2, 7.1),
+                                        "Post Avg" = c(21.1, 17.2, 17.5, 0.7, 6.1, 5.5, 10.1, 2.4, 5.1, 9.8, 4.4),
+                                        "Post SE" = c(1.7, 3.8, 4.5, 0.7, 2.9, 1.5, 1.8, 2.4, 2.4, 2.3, 2.2)))
+rownames(plotObjIDPrePost) <- c("Tents", "Chairs", "Loungers", "Umbrellas", "Toys", "Driftwood", "Holes", "Sand Fence", "Signage", "Other", 
+                                "Unidentified")
+#jpeg("ISTS 2019 Leave No Trace Figure 4 obstruction by object.jpg", width = 13, height = 5.5, units = "in", res = 300)
+par(family = "serif", mar = c(4.5, 4.5, 0.5, 0))
+ObjIDPlot <- barplot(t(plotObjIDPrePost[, c(1, 3)]), main = "", xlab = "Object Type", ylab = "Proportion of Obstructed Crawls", cex.lab = 1.2, 
+                     col = c("grey", "white"), cex.axis = 1.2, cex.names = 1.1, beside = TRUE, ylim = c(0, 45), 
+                     legend = c("Pre-Ordinance", "Post-Ordinance"), args.legend = list(x = "topleft", inset = c(0.05, 0.05), bty = 'n', cex = 1.2))
+arrows(ObjIDPlot, t(plotObjIDPrePost[, c(1, 3)]) + t(plotObjIDPrePost[, c(2, 4)]), 
+       ObjIDPlot, t(plotObjIDPrePost[, c(1, 3)]) - t(plotObjIDPrePost[, c(2, 4)]),
+       angle = 90, code = 3, length = 0.05)
+mtext("Pre-Ordinance n = 107 objects\nPost-Ordinance n = 183 objects", side = 3, line = -4, adj = 0.5, cex = 1.2, outer = FALSE)
+#dev.off()
+
+```
+  
+***  
+  
+## Research Answers  
+  
+### 1) Does the implementation of a "Leave No Trace"-type ordinance result in change in sea turtle crawl or nest distribution between beach sections?  
+  
+No, data from 2011 to 2018 does not support any change in the distribution of either crawls or nests after the Leave No Trace ordinance went into effect in 2016. Gulf Shores and Orange Beach combined (i.e., Treatment) have roughly 50% more crawls and nests than Fort Morgan (i.e., Control for Population) and the Bon Secour National Wildlife Refuge and Gulf State Park combined (i.e., Control for Ordinance). County-wide, there was an increase in crawls (~70%) and nests (~50%). The interaction between treatment group and time was not significant.  
+  
+### 2) Does the implementation of a "Leave No Trace"-type ordinance result in an increase in sea turtle nesting success?  
+  
+No, data from 2011 to 2018 does not support an increase in nesting success in Gulf Shores/Orange Beach relative to Fort Morgan or the Bon Secour National Wildlife Refuge/Gulf State Park.  Nesting success both before and after the ordinance went into effect were not statistically different between the 3 groups. Nesting success in Gulf Shores/Orange Beach decreased 15.6% relative to pre-ordinance levels, increased 2.1% (relative) in Fort Morgan, and decreased 11.6% (relative) in the Bon Secour National Wildlife Refuge/Gulf State Park. Only the decline in Gulf Shores/Orange Beach and was statistically significant.  
+  
+### 3) Does the implementation of a "Leave No Trace"- type ordinance result in a decrease in sea turtle obstructed crawls?  
+  
+No, data from 2011 to 2018 does not support a decrease in the frequency of obstructed crawls. Though obstructed crawls did decline by 18.1% relative to pre-ordinance levels in Gulf Shores/Orange Beach, this decrease was not statistically significant. Obstructed crawls increased by 45.5% (relative) in Fort Morgan after the ordinance, and decreased by 17.3% (relative) at the Bon Secour National Wildlife Refuge/Gulf State Park. Only the change in Fort Morgan was statistically significant. The Bon Secour National Wildlife Refuge/Gulf State Park had a significantly lower percentage of obstructed crawls than Fort Morgan or Gulf Shores/Orange Beach both before and after the ordinance.  
+  
+Changes in the frequency of particular obstructing objects through time is hampered by the prevalence of "Unidentified" objects in the first several years.  
+  
+#### **However, any reduction in obstructions is beneficial for reducing entanglement, entrapment, and ingestion risks to nesting females and emergent hatchlings, as well as improving environmental education, increasing tourism revenue, limiting environmental damage, and reducing production of marine debris.** Further investigation is warranted into the enforcement of the "Leave No Trace" ordinances, the social attitudes toward "Leave No Trace", and the additional social and ecological benefits of cleaner beaches.   
+  
+***  
+  
+# Supplemental Material  
+  
+Table S1. Nesting success per beach section and year.  
+  
+```{r supp_mat_3, echo = FALSE}
+
+kable(round(nNests/nCrawlsSection[,-6], 3))
+
+```
+  
+Table S2. The number of obstructed nests.  
+  
+```{r supp_mat_4, echo = FALSE}
+
+nObstNest <- tapply(LNTdata[LNTdata$Obstructed == "1",]$Success_Nest, list(LNTdata[LNTdata$Obstructed == "1",]$Year, 
+                                                                           LNTdata[LNTdata$Obstructed == "1",]$Region), sum)
+nObstNest <- nObstNest[,-2]
+kable(nObstNest)
+
+```
+  
+Table S3. Frequency of obstructed nests.  
+  
+```{r supp_mat_5, echo = FALSE}
+
+kable(round(nObstNest/nNests, 3))
+
+```
+  
+Table S4. The number of obstructed false crawls.  
+  
+```{r supp_mat_6, echo = FALSE}
+
+nObstFC <- tapply(LNTdata[which(LNTdata$Obstructed == "1" & LNTdata$Success_Nest == "0"),]$Success_Nest, 
+                  list(LNTdata[which(LNTdata$Obstructed == "1" & LNTdata$Success_Nest == "0"),]$Year, 
+                       LNTdata[which(LNTdata$Obstructed == "1" & LNTdata$Success_Nest == "0"),]$Region), length)
+nObstFC <- nObstFC[,-2]
+kable(nObstFC)
+
+```
+  
+Table S5. Frequency of obstructed false crawls.  
+  
+```{r supp_mat_7, echo = FALSE}
+
+nFC <- nCrawlsSection[,-6] - nNests
+
+kable(round(nObstFC/nFC, 3))
+
+```
+  
+  
+  
+  
