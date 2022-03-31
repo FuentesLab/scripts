@@ -1,0 +1,1506 @@
+---
+title: "Panhandle Buoy Data Processing"
+author: "Matt Ware"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+  
+## Background  
+  
+This R Markdown documents the preparation of the observed buoy data recorded off the Florida Panhandle. The available record from 3 buoys were downloaded from the National Data Buoy Center (https://www.ndbc.noaa.gov/):  
+  
+* Orange Beach - #42012, Depth: 25.9 m, Duration: 8 April 2009 to 31 December 2019, Location: 30.064, -87.551  
+* Pensacola - #42039, Depth: 270 m, Duration: 1 January 1998 to 31 December 2019, Location: 28.788, -86.008  
+* West Tampa - #42036, Depth: 49.7 m, Duration: 1 January 1998 to 31 December 2019, Location: 28.501, -84.516  
+  
+The text files were brought into Excel for cleaning. Date-Time gaps were filled in with empty cells in order to create a continuous time-series. Cells with error flags (i.e., 99, 999, 9999, as appropriate) were replaced with empty cells so as not to interfere with later analyses. The final cleaned Excel files were then brought into R for further analysis.  
+  
+  
+This analysis uses the following libraries:  
+  
+```{r libraries, message = FALSE, warning = FALSE, echo = TRUE}
+
+library(dplyr)
+library(knitr)
+library(plotrix)
+library(spatstat)
+
+```
+```{r r version}
+
+paste0("This RMarkdown and the included analyses were built using ", R.Version()$version.string)
+
+```
+  
+```{r useful_functions}
+
+# Convert radians to degrees
+rad2deg <- function(rad){ 
+  (rad*180)/pi
+}
+
+# Convert degrees to radians
+deg2rad <- function(deg){
+  (deg*pi)/180
+}
+
+## Linear Wave Conversion: Deep-water wave period to deep-water wavelength
+## Deep-water wave is defined as Water Depth > 1/2 Wavelength (D > 1/2L)
+DeepPeriod2WaveLength <- function(Period){
+  (9.8 * (Period^2))/(2*pi)
+}
+
+## Calculate buoy depth where deep-water waves transition to intermediate-water waves
+deep2intermediate <- function(BuoyDepth){
+  round(sqrt(((2*BuoyDepth)*(2*pi))/9.8), 3)
+}
+
+## Linear Wave Conversion: Intermediate-water wave period to Intermediate-water wavelength
+## Intermediate-water waves are defined as Water Depth between 1/20 and 1/2 Wavelength (1/20L >= D <= 1/2L)
+InterPeriod2WaveLength <- function(Period, Depth, LengthIn){ # Full equation
+  ((9.8 * (Period^2))/(2*pi)) * tanh((2*pi*Depth)/LengthIn)
+}
+
+Out <- NULL; Diff <- NULL # Blank vectors to hold data
+IterateWaveLength <- function(P, D, L_In){ # Iterates wavelength estimate as input until estimate input = equation output within tolerance
+  Out[1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[1])
+  Diff[1] <- Out[1]-L_In[1]
+  if(is.na(tail(Diff, n = 1))){
+    return(NA)
+  } else {
+    while(abs(tail(Diff, n = 1)) > 0.1){ # Keeps iterating until difference is less than 0.1 m
+      for(i in 1:length(L_In)){
+        L_In[i+1] <- L_In[i] + 0.01 # Increases estimate input by 0.01 m
+        Out[i+1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[i+1])
+        Diff[i+1] <- Out[i+1]-L_In[i+1]
+      }
+    }
+    return(tail(L_In, n = 1))
+    Out <- NULL; Diff <- NULL
+  }
+}
+
+## Reverse Shoal Intermediate Waves
+WaveNumber <- function(L){
+  (2 * pi)/L
+}
+
+ShoalingCoef <- function(L, D){
+  sqrt((2*cosh(WaveNumber(L) * D)^2)/(sinh(2 * WaveNumber(L) * D) + (2 * WaveNumber(L) * D)))
+}
+
+DeepHeight <- function(Hb, L, D){
+  round(Hb/ShoalingCoef(L, D), 3)
+}
+
+## Root mean square error
+RMSE <- function(Bias){
+  sqrt(mean(Bias^2, na.rm = TRUE))
+}
+
+```
+  
+```{r data_import, eval = FALSE}
+
+buoyData <- read.csv("Buoy Data - Aligned and Subsetted.csv", header = TRUE)
+
+buoyData$Date.Time..GMT. <- as.POSIXct(buoyData$Date.Time..GMT., format = "%m/%d/%Y %H:%M")
+
+```
+  
+***  
+***  
+  
+## All Available Hourly Data  
+  
+Following Stockdon et al. (2006) and the procedure utilized in Ware et al. 2019, the dominant wave periods were first transformed into wavelengths at each buoy location using linear wave theory:  
+  
+$L_0 = 9.8\frac{T^2}{2\pi}tanh(\frac{2\pi D}{L_0})$
+  
+where $L_0$ is the deep-water wavelength, $T$ is the wave period, and $D$ is the buoy depth.  
+  
+Wave heights for intermediate-depth waves were then reverse shoaled to deep-water equivalents:  
+  
+$\kappa = \frac{2\pi}{L_i}$ ($\kappa$ - wave number, $L_i$ - intermediate wavelength)  
+  
+$K_s = \sqrt\frac{2cosh(\kappa D)^2}{sinh(2 \kappa D) + 2\kappa D}$ ($K_s$ - shoaling coefficient, $\kappa$ - wave number, $D$ - buoy depth)  
+  
+$H_0 = \frac{H_i}{K_s}$ ($H_0$ - deep-water wave height, $H_i$ - intermediate wave height, $K_s$ - shoaling coefficient)  
+  
+**Stockdon et al. (2006) Empirical parameterization of setup, swash, and runup. Coastal Engineering 53: 573-588**  
+**Ware et al. (2019) Using wave runup modeling to inform coastal species management: An example application for sea turtle nest relocation. Ocean and Coastal Management 173: 17-25.**
+  
+```{r WT_wave_transform, message = FALSE, eval = FALSE}
+
+# Round 1 
+Out <- NULL; Diff <- NULL
+IterateWaveLength <- function(P, D, L_In){
+  Out[1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[1])
+  Diff[1] <- Out[1]-L_In[1]
+  if(is.na(tail(Diff, n = 1))){
+    return(NA)
+  } else {
+    while(abs(tail(Diff, n = 1)) > 1.25){ # Keeps iterating until difference is less than 1.25 m
+      for(i in 1:length(L_In)){
+        L_In[i+1] <- L_In[i] + 1 # Increases estimate input by 1 m
+        Out[i+1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[i+1])
+        Diff[i+1] <- Out[i+1]-L_In[i+1]
+      }
+    }
+    return(tail(L_In, n = 1))
+    Out <- NULL; Diff <- NULL
+  }
+}
+
+#deep2intermediate(49.7) # 7.983 sec is the wave period at which D = 1/2L at the West Tampa buoy
+
+Wavelength_WT <- NULL
+for(i in 1:length(buoyData$WT.Dominant.Wave.Period..sec.)){
+  if(is.na(buoyData$WT.Dominant.Wave.Period..sec.[i])){
+    Wavelength_WT[i] <- NA
+  } else if(buoyData$WT.Dominant.Wave.Period..sec.[i] <= 7.983){
+    Wavelength_WT[i] <- DeepPeriod2WaveLength(buoyData$WT.Dominant.Wave.Period..sec.[i])
+  } else {
+    Wavelength_WT[i] <- IterateWaveLength(P = buoyData$WT.Dominant.Wave.Period..sec.[i], D = 49.7, L_In = 0)
+  }
+}
+Wavelength_WT_1 <- Wavelength_WT
+
+
+# Round 2 
+
+Wavelength_WT_1a <- Wavelength_WT_1 - 1 # Prevents infinite loop if starting Wavelength value is too high
+
+Out <- NULL; Diff <- NULL
+IterateWaveLength <- function(P, D, L_In){
+  Out[1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[1])
+  Diff[1] <- Out[1]-L_In[1]
+  if(is.na(tail(Diff, n = 1))){
+    return(NA)
+  } else {
+    while(abs(tail(Diff, n = 1)) > 0.5){ # Keeps iterating until difference is less than 0.5 m
+      for(i in 1:length(L_In)){
+        L_In[i+1] <- L_In[i] + 0.1 # Increases estimate input by 0.1 m
+        Out[i+1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[i+1])
+        Diff[i+1] <- Out[i+1]-L_In[i+1]
+      }
+    }
+    return(tail(L_In, n = 1))
+    Out <- NULL; Diff <- NULL
+  }
+}
+
+Wavelength_WT <- NULL
+for(i in 1:length(buoyData$WT.Dominant.Wave.Period..sec.)){
+  if(is.na(buoyData$WT.Dominant.Wave.Period..sec.[i])){
+    Wavelength_WT[i] <- NA
+  } else if(buoyData$WT.Dominant.Wave.Period..sec.[i] <= 7.983){
+    Wavelength_WT[i] <- DeepPeriod2WaveLength(buoyData$WT.Dominant.Wave.Period..sec.[i])
+  } else {
+    Wavelength_WT[i] <- IterateWaveLength(P = buoyData$WT.Dominant.Wave.Period..sec.[i], D = 49.7, L_In = Wavelength_WT_1a[i])
+  }
+}
+Wavelength_WT_2 <- Wavelength_WT 
+
+# Round 3
+
+Wavelength_WT_2a <- Wavelength_WT_2 - 1 # Prevents infinite loop if starting Wavelength value is too high
+
+Out <- NULL; Diff <- NULL
+IterateWaveLength <- function(P, D, L_In){
+  Out[1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[1])
+  Diff[1] <- Out[1]-L_In[1]
+  if(is.na(tail(Diff, n = 1))){
+    return(NA)
+  } else {
+    while(abs(tail(Diff, n = 1)) > 0.1){ # Keeps iterating until difference is less than 0.1 m
+      for(i in 1:length(L_In)){
+        L_In[i+1] <- L_In[i] + 0.01 # Increases estimate input by 0.01 m
+        Out[i+1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[i+1])
+        Diff[i+1] <- Out[i+1]-L_In[i+1]
+      }
+    }
+    return(tail(L_In, n = 1))
+    Out <- NULL; Diff <- NULL
+  }
+}
+
+Wavelength_WT <- NULL
+for(i in 1:length(buoyData$WT.Dominant.Wave.Period..sec.)){
+  if(is.na(buoyData$WT.Dominant.Wave.Period..sec.[i])){
+    Wavelength_WT[i] <- NA
+  } else if(buoyData$WT.Dominant.Wave.Period..sec.[i] <= 7.983){
+    Wavelength_WT[i] <- DeepPeriod2WaveLength(buoyData$WT.Dominant.Wave.Period..sec.[i])
+  } else {
+    Wavelength_WT[i] <- IterateWaveLength(P = buoyData$WT.Dominant.Wave.Period..sec.[i], D = 49.7, L_In = Wavelength_WT_2a[i])
+  }
+}
+Wavelength_WT_3 <- Wavelength_WT 
+
+buoyData <- data.frame(buoyData, WT_DeepWL_m = Wavelength_WT_3)
+
+```
+  
+```{r Pens_wave_transform, message = FALSE, eval = FALSE}
+
+# Round 1 
+Out <- NULL; Diff <- NULL
+IterateWaveLength <- function(P, D, L_In){
+  Out[1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[1])
+  Diff[1] <- Out[1]-L_In[1]
+  if(is.na(tail(Diff, n = 1))){
+    return(NA)
+  } else {
+    while(abs(tail(Diff, n = 1)) > 1.25){ # Keeps iterating until difference is less than 1.25 m
+      for(i in 1:length(L_In)){
+        L_In[i+1] <- L_In[i] + 1 # Increases estimate input by 1 m
+        Out[i+1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[i+1])
+        Diff[i+1] <- Out[i+1]-L_In[i+1]
+      }
+    }
+    return(tail(L_In, n = 1))
+    Out <- NULL; Diff <- NULL
+  }
+}
+
+#deep2intermediate(270) # 18.607 sec is the wave period at which D = 1/2L at the Pensacola buoy
+
+Wavelength_Pens <- NULL
+for(i in 1:length(buoyData$Pens.Dominant.Wave.Period..sec.)){
+  if(is.na(buoyData$Pens.Dominant.Wave.Period..sec.[i])){
+    Wavelength_Pens[i] <- NA
+  } else if(buoyData$Pens.Dominant.Wave.Period..sec.[i] <= 18.607){ # 18.607 sec is wave period at which D = 1/2L at this buoy
+    Wavelength_Pens[i] <- DeepPeriod2WaveLength(buoyData$Pens.Dominant.Wave.Period..sec.[i])
+  } else {
+    Wavelength_Pens[i] <- IterateWaveLength(P = buoyData$Pens.Dominant.Wave.Period..sec.[i], D = 270, L_In = 0)
+  }
+}
+Wavelength_Pens_1 <- Wavelength_Pens
+
+# Round 2 
+
+Wavelength_Pens_1a <- Wavelength_Pens_1 - 1 # Prevents infinite loop if starting Wavelength value is too high
+
+Out <- NULL; Diff <- NULL
+IterateWaveLength <- function(P, D, L_In){
+  Out[1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[1])
+  Diff[1] <- Out[1]-L_In[1]
+  if(is.na(tail(Diff, n = 1))){
+    return(NA)
+  } else {
+    while(abs(tail(Diff, n = 1)) > 0.5){ # Keeps iterating until difference is less than 0.5 m
+      for(i in 1:length(L_In)){
+        L_In[i+1] <- L_In[i] + 0.1 # Increases estimate input by 0.1 m
+        Out[i+1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[i+1])
+        Diff[i+1] <- Out[i+1]-L_In[i+1]
+      }
+    }
+    return(tail(L_In, n = 1))
+    Out <- NULL; Diff <- NULL
+  }
+}
+
+Wavelength_Pens <- NULL
+for(i in 1:length(buoyData$Pens.Dominant.Wave.Period..sec.)){
+  if(is.na(buoyData$Pens.Dominant.Wave.Period..sec.[i])){
+    Wavelength_Pens[i] <- NA
+  } else if(buoyData$Pens.Dominant.Wave.Period..sec.[i] <= 18.607){
+    Wavelength_Pens[i] <- DeepPeriod2WaveLength(buoyData$Pens.Dominant.Wave.Period..sec.[i])
+  } else {
+    Wavelength_Pens[i] <- IterateWaveLength(P = buoyData$Pens.Dominant.Wave.Period..sec.[i], D = 270, L_In = Wavelength_Pens_1a[i])
+  }
+}
+Wavelength_Pens_2 <- Wavelength_Pens 
+
+# Round 3
+
+Wavelength_Pens_2a <- Wavelength_Pens_2 - 1 # Prevents infinite loop if starting Wavelength value is too high
+
+Out <- NULL; Diff <- NULL
+IterateWaveLength <- function(P, D, L_In){
+  Out[1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[1])
+  Diff[1] <- Out[1]-L_In[1]
+  if(is.na(tail(Diff, n = 1))){
+    return(NA)
+  } else {
+    while(abs(tail(Diff, n = 1)) > 0.1){ # Keeps iterating until difference is less than 0.1 m
+      for(i in 1:length(L_In)){
+        L_In[i+1] <- L_In[i] + 0.01 # Increases estimate input by 0.01 m
+        Out[i+1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[i+1])
+        Diff[i+1] <- Out[i+1]-L_In[i+1]
+      }
+    }
+    return(tail(L_In, n = 1))
+    Out <- NULL; Diff <- NULL
+  }
+}
+
+Wavelength_Pens <- NULL
+for(i in 1:length(buoyData$Pens.Dominant.Wave.Period..sec.)){
+  if(is.na(buoyData$Pens.Dominant.Wave.Period..sec.[i])){
+    Wavelength_Pens[i] <- NA
+  } else if(buoyData$Pens.Dominant.Wave.Period..sec.[i] <= 18.607){
+    Wavelength_Pens[i] <- DeepPeriod2WaveLength(buoyData$Pens.Dominant.Wave.Period..sec.[i])
+  } else {
+    Wavelength_Pens[i] <- IterateWaveLength(P = buoyData$Pens.Dominant.Wave.Period..sec.[i], D = 270, L_In = Wavelength_Pens_2a[i])
+  }
+}
+Wavelength_Pens_3 <- Wavelength_Pens
+
+buoyData <- data.frame(buoyData, Pens_DeepWL_m = Wavelength_Pens_3)
+
+```
+  
+```{r OB_wave_transform, message = FALSE, eval = FALSE}
+
+# Round 1 
+Out <- NULL; Diff <- NULL
+IterateWaveLength <- function(P, D, L_In){
+  Out[1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[1])
+  Diff[1] <- Out[1]-L_In[1]
+  if(is.na(tail(Diff, n = 1))){
+    return(NA)
+  } else {
+    while(abs(tail(Diff, n = 1)) > 1.25){ # Keeps iterating until difference is less than 1.25 m
+      for(i in 1:length(L_In)){
+        L_In[i+1] <- L_In[i] + 1 # Increases estimate input by 1 m
+        Out[i+1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[i+1])
+        Diff[i+1] <- Out[i+1]-L_In[i+1]
+      }
+    }
+    return(tail(L_In, n = 1))
+    Out <- NULL; Diff <- NULL
+  }
+}
+
+#deep2intermediate(25.9) # 5.763 sec is the wave period at which D = 1/2L at the Orange Beach buoy
+
+Wavelength_OB <- NULL
+for(i in 1:length(buoyData$OB.Dominant.Wave.Period..sec.)){
+  if(is.na(buoyData$OB.Dominant.Wave.Period..sec.[i])){
+    Wavelength_OB[i] <- NA
+  } else if(buoyData$OB.Dominant.Wave.Period..sec.[i] <= 5.763){ # 5.763 sec is wave period at which D = 1/2L at this buoy
+    Wavelength_OB[i] <- DeepPeriod2WaveLength(buoyData$OB.Dominant.Wave.Period..sec.[i])
+  } else {
+    Wavelength_OB[i] <- IterateWaveLength(P = buoyData$OB.Dominant.Wave.Period..sec.[i], D = 25.9, L_In = 0)
+  }
+}
+Wavelength_OB_1 <- Wavelength_OB
+
+# Round 2 
+
+Wavelength_OB_1a <- Wavelength_OB_1 - 1 # Prevents infinite loop if starting Wavelength value is too high
+
+Out <- NULL; Diff <- NULL
+IterateWaveLength <- function(P, D, L_In){
+  Out[1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[1])
+  Diff[1] <- Out[1]-L_In[1]
+  if(is.na(tail(Diff, n = 1))){
+    return(NA)
+  } else {
+    while(abs(tail(Diff, n = 1)) > 0.5){ # Keeps iterating until difference is less than 0.5 m
+      for(i in 1:length(L_In)){
+        L_In[i+1] <- L_In[i] + 0.1 # Increases estimate input by 0.1 m
+        Out[i+1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[i+1])
+        Diff[i+1] <- Out[i+1]-L_In[i+1]
+      }
+    }
+    return(tail(L_In, n = 1))
+    Out <- NULL; Diff <- NULL
+  }
+}
+
+Wavelength_OB <- NULL
+for(i in 1:length(buoyData$OB.Dominant.Wave.Period..sec.)){
+  if(is.na(buoyData$OB.Dominant.Wave.Period..sec.[i])){
+    Wavelength_OB[i] <- NA
+  } else if(buoyData$OB.Dominant.Wave.Period..sec.[i] <= 5.763){
+    Wavelength_OB[i] <- DeepPeriod2WaveLength(buoyData$OB.Dominant.Wave.Period..sec.[i])
+  } else {
+    Wavelength_OB[i] <- IterateWaveLength(P = buoyData$OB.Dominant.Wave.Period..sec.[i], D = 25.9, L_In = Wavelength_OB_1a[i])
+  }
+}
+Wavelength_OB_2 <- Wavelength_OB 
+
+# Round 3
+
+Wavelength_OB_2a <- Wavelength_OB_2 - 1 # Prevents infinite loop if starting Wavelength value is too high
+
+Out <- NULL; Diff <- NULL
+IterateWaveLength <- function(P, D, L_In){
+  Out[1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[1])
+  Diff[1] <- Out[1]-L_In[1]
+  if(is.na(tail(Diff, n = 1))){
+    return(NA)
+  } else {
+    while(abs(tail(Diff, n = 1)) > 0.1){ # Keeps iterating until difference is less than 0.1 m
+      for(i in 1:length(L_In)){
+        L_In[i+1] <- L_In[i] + 0.01 # Increases estimate input by 0.01 m
+        Out[i+1] <- InterPeriod2WaveLength(Period = P, Depth = D, LengthIn = L_In[i+1])
+        Diff[i+1] <- Out[i+1]-L_In[i+1]
+      }
+    }
+    return(tail(L_In, n = 1))
+    Out <- NULL; Diff <- NULL
+  }
+}
+
+Wavelength_OB <- NULL
+for(i in 1:length(buoyData$OB.Dominant.Wave.Period..sec.)){
+  if(is.na(buoyData$OB.Dominant.Wave.Period..sec.[i])){
+    Wavelength_OB[i] <- NA
+  } else if(buoyData$OB.Dominant.Wave.Period..sec.[i] <= 5.763){
+    Wavelength_OB[i] <- DeepPeriod2WaveLength(buoyData$OB.Dominant.Wave.Period..sec.[i])
+  } else {
+    Wavelength_OB[i] <- IterateWaveLength(P = buoyData$OB.Dominant.Wave.Period..sec.[i], D = 25.9, L_In = Wavelength_OB_2a[i])
+  }
+}
+Wavelength_OB_3 <- Wavelength_OB 
+
+buoyData <- data.frame(buoyData, OB_DeepWL_m = Wavelength_OB_3)
+
+```
+  
+```{r wave_height_transform, message = FALSE, eval = FALSE}
+
+DeepWaveHeight_WT <- NULL
+for(i in 1:length(buoyData$WT.Wave.Height..m.)){
+  if(is.na(buoyData$WT.Dominant.Wave.Period..sec.[i])){
+    DeepWaveHeight_WT[i] <- NA
+  } else if(buoyData$WT.Dominant.Wave.Period..sec.[i] < 7.983){
+    DeepWaveHeight_WT[i] <- buoyData$WT.Wave.Height..m.[i]
+  } else {
+    DeepWaveHeight_WT[i] <- round(DeepHeight(Hb = buoyData$WT.Wave.Height..m.[i], L = buoyData$WT_DeepWL_m[i], D = 49.7), 2)
+  }
+}
+
+DeepWaveHeight_Pens <- NULL
+for(i in 1:length(buoyData$Pens.Wave.Height..m.)){
+  if(is.na(buoyData$Pens.Dominant.Wave.Period..sec.[i])){
+    DeepWaveHeight_Pens[i] <- NA
+  } else if(buoyData$Pens.Dominant.Wave.Period..sec.[i] < 18.607){
+    DeepWaveHeight_Pens[i] <- buoyData$Pens.Wave.Height..m.[i]
+  } else {
+    DeepWaveHeight_Pens[i] <- round(DeepHeight(Hb = buoyData$Pens.Wave.Height..m.[i], L = buoyData$Pens_DeepWL_m[i], D = 270), 2)
+  }
+}
+
+DeepWaveHeight_OB <- NULL
+for(i in 1:length(buoyData$OB.Wave.Height..m.)){
+  if(is.na(buoyData$OB.Dominant.Wave.Period..sec.[i])){
+    DeepWaveHeight_OB[i] <- NA
+  } else if(buoyData$OB.Dominant.Wave.Period..sec.[i] < 5.763){
+    DeepWaveHeight_OB[i] <- buoyData$OB.Wave.Height..m.[i]
+  } else {
+    DeepWaveHeight_OB[i] <- round(DeepHeight(Hb = buoyData$OB.Wave.Height..m.[i], L = buoyData$OB_DeepWL_m[i], D = 25.9), 2)
+  }
+}
+
+buoyData <- data.frame(buoyData, WT_DeepHT_m = DeepWaveHeight_WT, Pens_DeepHT_m = DeepWaveHeight_Pens, OB_DeepHT_m = DeepWaveHeight_OB)
+
+#write.csv(buoyData, "Buoy Data - R Processed Hourly.csv")
+
+```
+  
+  
+Below is a visualization of the available oceanographic data from the respective buoys. Note that there are several small and a few large gaps in the various records. Most waves reported by the 3 buoys are 0.824-1.016 m high with a mean wave period of 5.275-5.647 sec. Median values are lower than mean values (0.70-0.83 m high, 5.26-5.56 sec long) due to the effect of large wave height/period observations during storms. There are also distinctive peaks in the tail of the wave period distribution. These peaks most likely correspond to various storm events.  
+  
+```{r visualization_all_1, fig.width = 12, fig.height = 9}
+
+buoyData <- read.csv("Buoy Data - R Processed Hourly.csv", header = TRUE)
+buoyData$Date.Time..GMT. <- as.POSIXct(buoyData$Date.Time..GMT., format = "%m/%d/%Y %H:%M")
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(3, 1))
+plot(buoyData$Date.Time..GMT., buoyData$OB_DeepHT_m, xlab = "Year", ylim = c(0, 12),
+     ylab = "Wave Height (m)", type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Orange Beach #42012")
+plot(buoyData$Date.Time..GMT., buoyData$Pens_DeepHT_m, xlab = "Year", ylim = c(0, 12),
+     ylab = "Wave Height (m)", type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Pensacola #42039")
+plot(buoyData$Date.Time..GMT., buoyData$WT_DeepHT_m, xlab = "Year", ylim = c(0, 12),
+     ylab = "Wave Height (m)", type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "West Tampa #42036")
+
+```
+  
+```{r visualization_all_2, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(density(buoyData$OB_DeepHT_m, na.rm = TRUE), ylim = c(0, 1.3), xlab = "Wave Height (m)", xlim = c(0, 12), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "black", main = "Wave Height Distribution")
+par(new = TRUE)
+plot(density(buoyData$Pens_DeepHT_m, na.rm = TRUE), ylim = c(0, 1.3), xlab = "", xlim = c(0, 12), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(density(buoyData$WT_DeepHT_m, na.rm = TRUE), ylim = c(0, 1.3), xlab = "", xlim = c(0, 12), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "blue", main = "")
+legend("topright", legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), bty = 'n')
+par(new = FALSE)
+
+plot(density(buoyData$OB_DeepHT_m, na.rm = TRUE), ylim = c(0, 1.3), xlab = "Wave Height (m)", xlim = c(0, 4), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "black", main = "Wave Height Distribution")
+par(new = TRUE)
+plot(density(buoyData$Pens_DeepHT_m, na.rm = TRUE), ylim = c(0, 1.3), xlab = "", xlim = c(0, 4), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(density(buoyData$WT_DeepHT_m, na.rm = TRUE), ylim = c(0, 1.3), xlab = "", xlim = c(0, 4), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "blue", main = "")
+legend("topright", legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), bty = 'n')
+par(new = FALSE)
+
+```
+  
+```{r visualization_all_3, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(ecdf(buoyData$OB_DeepHT_m), xlab = "Wave Height (m)", xlim = c(0, 12), ylab = "Cumulative Proportion", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "black", main = "Wave Height ECDF")
+par(new = TRUE)
+plot(ecdf(buoyData$Pens_DeepHT_m), xlab = "Wave Height (m)", xlim = c(0, 12), ylab = "Cumulative Proportion", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "red", main = "")
+par(new = TRUE)
+plot(ecdf(buoyData$WT_DeepHT_m), xlab = "Wave Height (m)", xlim = c(0, 12), ylab = "Cumulative Proportion", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "blue", main = "")
+legend(x = 8, y = 0.9, legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), bty = 'n')
+par(new = FALSE)
+
+plot(ecdf(buoyData$OB_DeepHT_m), xlab = "Wave Height (m)", xlim = c(0, 3.5), ylab = "Cumulative Proportion", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "black", main = "Wave Height ECDF")
+par(new = TRUE)
+plot(ecdf(buoyData$Pens_DeepHT_m), xlab = "Wave Height (m)", xlim = c(0, 3.5), ylab = "Cumulative Proportion", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "red", main = "")
+par(new = TRUE)
+plot(ecdf(buoyData$WT_DeepHT_m), xlab = "Wave Height (m)", xlim = c(0, 3.5), ylab = "Cumulative Proportion", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "blue", main = "")
+legend(x = 2.35, y = 0.9, legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), bty = 'n')
+par(new = FALSE)
+
+```
+  
+```{r visualization_all_4, fig.width = 12, fig.height = 9}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(3, 1))
+plot(buoyData$Date.Time..GMT., buoyData$OB.Dominant.Wave.Period..sec., xlab = "Year", ylim = c(0, 25),
+     ylab = "Dominant Wave Period (sec)", type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Orange Beach #42012")
+plot(buoyData$Date.Time..GMT., buoyData$Pens.Dominant.Wave.Period..sec., xlab = "Year", ylim = c(0, 25),
+     ylab = "Dominant Wave Period (sec)", type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Pensacola #42039")
+plot(buoyData$Date.Time..GMT., buoyData$WT.Dominant.Wave.Period..sec., xlab = "Year", ylim = c(0, 25),
+     ylab = "Dominant Wave Period (sec)", type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "West Tampa #42036")
+
+```
+  
+```{r visualization_all_5, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(density(buoyData$OB.Dominant.Wave.Period..sec., na.rm = TRUE), ylim = c(0, 0.30), xlab = "Dominant Wave Period (sec)", xlim = c(0, 25), 
+     lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Wave Period Distribution")
+par(new = TRUE)
+plot(density(buoyData$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), ylim = c(0, 0.30), xlab = "", xlim = c(0, 25), lwd = 2, 
+     cex.axis = 1.2, cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(density(buoyData$WT.Dominant.Wave.Period..sec., na.rm = TRUE), ylim = c(0, 0.30), xlab = "", xlim = c(0, 25), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "blue", main = "")
+legend("topright", legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), bty = 'n')
+par(new = FALSE)
+
+plot(density(buoyData$OB.Dominant.Wave.Period..sec., na.rm = TRUE), ylim = c(0, 0.30), xlab = "Dominant Wave Period (sec)", xlim = c(0, 13), 
+     lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Wave Period Distribution")
+par(new = TRUE)
+plot(density(buoyData$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), ylim = c(0, 0.30), xlab = "", xlim = c(0, 13), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(density(buoyData$WT.Dominant.Wave.Period..sec., na.rm = TRUE), ylim = c(0, 0.30), xlab = "", xlim = c(0, 13), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "blue", main = "")
+legend("topright", legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), bty = 'n')
+par(new = FALSE)
+
+```
+  
+```{r visualization_all_6, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(ecdf(buoyData$OB.Dominant.Wave.Period..sec.), xlab = "Dominant Wave Period (sec)", xlim = c(0, 25), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Wave Period ECDF")
+par(new = TRUE)
+plot(ecdf(buoyData$Pens.Dominant.Wave.Period..sec.), xlab = "Dominant Wave Period (sec)", xlim = c(0, 25), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(ecdf(buoyData$WT.Dominant.Wave.Period..sec.), xlab = "Dominant Wave Period (sec)", xlim = c(0, 25), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "blue", main = "")
+legend(x = 17, y = 0.9, legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), 
+       bty = 'n')
+par(new = FALSE)
+
+plot(ecdf(buoyData$OB.Dominant.Wave.Period..sec.), xlab = "Dominant Wave Period (sec)", xlim = c(0, 13), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Wave Period ECDF")
+par(new = TRUE)
+plot(ecdf(buoyData$Pens.Dominant.Wave.Period..sec.), xlab = "Dominant Wave Period (sec)", xlim = c(0, 13), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(ecdf(buoyData$WT.Dominant.Wave.Period..sec.), xlab = "Dominant Wave Period (sec)", xlim = c(0, 13), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "blue", main = "")
+legend(x = 9, y = 0.9, legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), 
+       bty = 'n')
+par(new = FALSE)
+
+```
+  
+Below is a summary of the available oceanographic data from each buoy. Though most waves are between 0.46-0.52 m and 1.020-1.310 m high (25th to 75th percentile) and 4.0-4.55 sec and 6.25-6.67 sec long (25th to 75th percentile), the maximum values reported were highly variable between buoys (6.0-12.0 m high and 23.53-25.00 sec long).  
+  
+```{r summary_all_OrangeBeach, message = FALSE, warning = FALSE}
+
+summaryVariables <- c("Wave Height (m)", "Wave Period (sec)", "Wave Direction (deg)", "Water Temp (deg C)")
+summaryTerms <- c("Mean", "SE", "Median", "N", "Min", "Max", "25th Percentile", "75th Percentile", "2.5th Percentile", "97.5th Percentile")
+
+obWaveDirection <- density(buoyData$OB.Wave.Direction..deg., na.rm = TRUE)
+
+obSummaryMean <- c(round(mean(buoyData$OB_DeepHT_m, na.rm = TRUE), 3),
+                   round(mean(buoyData$OB.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   round(obWaveDirection$x[which.max(obWaveDirection$y)], 3),
+                   round(mean(buoyData$OB.Water.Temperature...C., na.rm = TRUE), 2))
+obSummarySE <- c(round(std.error(buoyData$OB_DeepHT_m, na.rm = TRUE), 3),
+                   round(std.error(buoyData$OB.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   NA,
+                   round(std.error(buoyData$OB.Water.Temperature...C., na.rm = TRUE), 2))
+obSummaryMedian <- c(round(median(buoyData$OB_DeepHT_m, na.rm = TRUE), 3),
+                   round(median(buoyData$OB.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   NA,
+                   round(median(buoyData$OB.Water.Temperature...C., na.rm = TRUE), 2))
+obSummaryN <- c(round(length(buoyData[!is.na(buoyData$OB_DeepHT_m),]$OB_DeepHT_m), 0),
+                round(length(buoyData[!is.na(buoyData$OB.Dominant.Wave.Period..sec.),]$OB.Dominant.Wave.Period..sec.), 0),
+                round(length(buoyData[!is.na(buoyData$OB.Wave.Direction..deg.),]$OB.Wave.Direction..deg.), 0),
+                round(length(buoyData[!is.na(buoyData$OB.Water.Temperature...C.),]$OB.Water.Temperature...C.), 0))
+obSummaryMin <- c(round(min(buoyData$OB_DeepHT_m, na.rm = TRUE), 2),
+                   round(min(buoyData$OB.Dominant.Wave.Period..sec., na.rm = TRUE), 2),
+                   NA,
+                   round(min(buoyData$OB.Water.Temperature...C., na.rm = TRUE), 2))
+obSummaryMax <- c(round(max(buoyData$OB_DeepHT_m, na.rm = TRUE), 2),
+                   round(max(buoyData$OB.Dominant.Wave.Period..sec., na.rm = TRUE), 2),
+                   NA,
+                   round(max(buoyData$OB.Water.Temperature...C., na.rm = TRUE), 2))
+obSummary25 <- c(round(unname(quantile(buoyData$OB_DeepHT_m, probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$OB.Dominant.Wave.Period..sec., probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(obWaveDirection, probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$OB.Water.Temperature...C., probs = 0.25, na.rm = TRUE)), 2))
+obSummary75 <- c(round(unname(quantile(buoyData$OB_DeepHT_m, probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$OB.Dominant.Wave.Period..sec., probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(obWaveDirection, probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$OB.Water.Temperature...C., probs = 0.75, na.rm = TRUE)), 2))
+obSummary2_5 <- c(round(unname(quantile(buoyData$OB_DeepHT_m, probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$OB.Dominant.Wave.Period..sec., probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(obWaveDirection, probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$OB.Water.Temperature...C., probs = 0.025, na.rm = TRUE)), 2))
+obSummary97_5 <- c(round(unname(quantile(buoyData$OB_DeepHT_m, probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$OB.Dominant.Wave.Period..sec., probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(obWaveDirection, probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$OB.Water.Temperature...C., probs = 0.975, na.rm = TRUE)), 2))
+
+obAllSummary <- as.data.frame(rbind(obSummaryMean, obSummarySE, obSummaryMedian, obSummaryN, obSummaryMin, obSummaryMax, obSummary25, 
+                                    obSummary75, obSummary2_5, obSummary97_5))
+colnames(obAllSummary) <- summaryVariables
+rownames(obAllSummary) <- summaryTerms
+kable(obAllSummary, caption = "Orange Beach Buoy - Hourly, 2009 to 2019")
+
+```
+  
+```{r summary_all_Pensacola, message = FALSE, warning = FALSE}
+
+pensWaveDirection <- density(buoyData$Pens.Wave.Direction..deg., na.rm = TRUE)
+
+pensSummaryMean <- c(round(mean(buoyData$Pens_DeepHT_m, na.rm = TRUE), 3),
+                   round(mean(buoyData$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   round(obWaveDirection$x[which.max(pensWaveDirection$y)], 3),
+                   round(mean(buoyData$Pens.Water.Temperature...C., na.rm = TRUE), 2))
+pensSummarySE <- c(round(std.error(buoyData$Pens_DeepHT_m, na.rm = TRUE), 3),
+                   round(std.error(buoyData$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   NA,
+                   round(std.error(buoyData$Pens.Water.Temperature...C., na.rm = TRUE), 2))
+pensSummaryMedian <- c(round(median(buoyData$Pens_DeepHT_m, na.rm = TRUE), 3),
+                   round(median(buoyData$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   NA,
+                   round(median(buoyData$Pens.Water.Temperature...C., na.rm = TRUE), 2))
+pensSummaryN <- c(round(length(buoyData[!is.na(buoyData$Pens_DeepHT_m),]$Pens_DeepHT_m), 0),
+                round(length(buoyData[!is.na(buoyData$Pens.Dominant.Wave.Period..sec.),]$Pens.Dominant.Wave.Period..sec.), 0),
+                round(length(buoyData[!is.na(buoyData$Pens.Wave.Direction..deg.),]$Pens.Wave.Direction..deg.), 0),
+                round(length(buoyData[!is.na(buoyData$Pens.Water.Temperature...C.),]$Pens.Water.Temperature...C.), 0))
+pensSummaryMin <- c(round(min(buoyData$Pens_DeepHT_m, na.rm = TRUE), 2),
+                   round(min(buoyData$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), 2),
+                   NA,
+                   round(min(buoyData$Pens.Water.Temperature...C., na.rm = TRUE), 2))
+pensSummaryMax <- c(round(max(buoyData$Pens_DeepHT_m, na.rm = TRUE), 2),
+                   round(max(buoyData$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), 2),
+                   NA,
+                   round(max(buoyData$Pens.Water.Temperature...C., na.rm = TRUE), 2))
+pensSummary25 <- c(round(unname(quantile(buoyData$Pens_DeepHT_m, probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$Pens.Dominant.Wave.Period..sec., probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(pensWaveDirection, probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$Pens.Water.Temperature...C., probs = 0.25, na.rm = TRUE)), 2))
+pensSummary75 <- c(round(unname(quantile(buoyData$Pens_DeepHT_m, probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$Pens.Dominant.Wave.Period..sec., probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(pensWaveDirection, probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$Pens.Water.Temperature...C., probs = 0.75, na.rm = TRUE)), 2))
+pensSummary2_5 <- c(round(unname(quantile(buoyData$Pens_DeepHT_m, probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$Pens.Dominant.Wave.Period..sec., probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(pensWaveDirection, probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$Pens.Water.Temperature...C., probs = 0.025, na.rm = TRUE)), 2))
+pensSummary97_5 <- c(round(unname(quantile(buoyData$Pens_DeepHT_m, probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$Pens.Dominant.Wave.Period..sec., probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(pensWaveDirection, probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$Pens.Water.Temperature...C., probs = 0.975, na.rm = TRUE)), 2))
+
+pensAllSummary <- as.data.frame(rbind(pensSummaryMean, pensSummarySE, pensSummaryMedian, pensSummaryN, pensSummaryMin, pensSummaryMax, 
+                                      pensSummary25, pensSummary75, pensSummary2_5, pensSummary97_5))
+colnames(pensAllSummary) <- summaryVariables
+rownames(pensAllSummary) <- summaryTerms
+kable(pensAllSummary, caption = "Pensacola Buoy - Hourly, 1998 to 2019")
+
+```
+  
+```{r summary_all_WestTampa, message = FALSE, warning = FALSE}
+
+wtWaveDirection <- density(buoyData$WT.Wave.Direction..deg., na.rm = TRUE)
+
+wtSummaryMean <- c(round(mean(buoyData$WT_DeepHT_m, na.rm = TRUE), 3),
+                   round(mean(buoyData$WT.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   round(obWaveDirection$x[which.max(wtWaveDirection$y)], 3),
+                   round(mean(buoyData$WT.Water.Temperature...C., na.rm = TRUE), 2))
+wtSummarySE <- c(round(std.error(buoyData$WT_DeepHT_m, na.rm = TRUE), 3),
+                   round(std.error(buoyData$WT.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   NA,
+                   round(std.error(buoyData$WT.Water.Temperature...C., na.rm = TRUE), 2))
+wtSummaryMedian <- c(round(median(buoyData$WT_DeepHT_m, na.rm = TRUE), 3),
+                   round(median(buoyData$WT.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   NA,
+                   round(median(buoyData$WT.Water.Temperature...C., na.rm = TRUE), 2))
+wtSummaryN <- c(round(length(buoyData[!is.na(buoyData$WT_DeepHT_m),]$WT_DeepHT_m), 0),
+                round(length(buoyData[!is.na(buoyData$WT.Dominant.Wave.Period..sec.),]$WT.Dominant.Wave.Period..sec.), 0),
+                round(length(buoyData[!is.na(buoyData$WT.Wave.Direction..deg.),]$WT.Wave.Direction..deg.), 0),
+                round(length(buoyData[!is.na(buoyData$WT.Water.Temperature...C.),]$WT.Water.Temperature...C.), 0))
+wtSummaryMin <- c(round(min(buoyData$WT_DeepHT_m, na.rm = TRUE), 2),
+                   round(min(buoyData$WT.Dominant.Wave.Period..sec., na.rm = TRUE), 2),
+                   NA,
+                   round(min(buoyData$WT.Water.Temperature...C., na.rm = TRUE), 2))
+wtSummaryMax <- c(round(max(buoyData$WT_DeepHT_m, na.rm = TRUE), 2),
+                   round(max(buoyData$WT.Dominant.Wave.Period..sec., na.rm = TRUE), 2),
+                   NA,
+                   round(max(buoyData$WT.Water.Temperature...C., na.rm = TRUE), 2))
+wtSummary25 <- c(round(unname(quantile(buoyData$WT_DeepHT_m, probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$WT.Dominant.Wave.Period..sec., probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(wtWaveDirection, probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$WT.Water.Temperature...C., probs = 0.25, na.rm = TRUE)), 2))
+wtSummary75 <- c(round(unname(quantile(buoyData$WT_DeepHT_m, probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$WT.Dominant.Wave.Period..sec., probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(wtWaveDirection, probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$WT.Water.Temperature...C., probs = 0.75, na.rm = TRUE)), 2))
+wtSummary2_5 <- c(round(unname(quantile(buoyData$WT_DeepHT_m, probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$WT.Dominant.Wave.Period..sec., probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(wtWaveDirection, probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$WT.Water.Temperature...C., probs = 0.025, na.rm = TRUE)), 2))
+wtSummary97_5 <- c(round(unname(quantile(buoyData$WT_DeepHT_m, probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$WT.Dominant.Wave.Period..sec., probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(wtWaveDirection, probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData$WT.Water.Temperature...C., probs = 0.975, na.rm = TRUE)), 2))
+
+wtAllSummary <- as.data.frame(rbind(wtSummaryMean, wtSummarySE, wtSummaryMedian, wtSummaryN, wtSummaryMin, wtSummaryMax, wtSummary25, 
+                                      wtSummary75, wtSummary2_5, wtSummary97_5))
+colnames(wtAllSummary) <- summaryVariables
+rownames(wtAllSummary) <- summaryTerms
+kable(wtAllSummary, caption = "West Tampa - Hourly, 1998 to 2019")
+
+```
+  
+## Bin wave height and direction conditions by buoy  
+  
+Wave height and direction observations were combined into variable-width bins to classify the most common combinations at each buoy, following Long et al. (2014). For wave height, bins were separated every 0.5 m up to 2.0 m, then a catch-all bin up to 12.0 m. For direction, bins were separated every 22.5 degrees up to 360 degrees. This results in 80 bins overall. The most populous bin for Orange Beach (7.7%) was Bin 37 (0.5 <= Wave Height (m) < 1.0 & 157.5 <= direction (degrees) < 180.0). For Pensacola and West Tampa, Bin 41 (0 <= Wave Height (m) < 0.5 & 180.0 <= direction (degrees) < 202.5) was the most populous (5.3% and 4.7%, respectively).  
+  
+**Long et al. (2014) A probabilistic method for construction wave time-series at inshore locations using model scenarios. Coastal Engineering 89: 53-62**  
+  
+```{r binning_all, message = FALSE, warning = FALSE}
+
+bins_WaveHeight <- c(0, 0.5, 1.0, 1.5, 2.0, 12)
+bins_Direction <- seq(from = 0, to = 360, by = 22.5)
+
+bins_Numbered <- matrix(seq(from = 1, to = 80, by = 1), ncol = 5, nrow = 16, byrow = TRUE)
+
+obBins <- matrix(NA, ncol = 5, nrow = 16, byrow = TRUE)
+colnames(obBins) <- bins_WaveHeight[1:5]
+rownames(obBins) <- bins_Direction[1:16]
+
+for(i in 1:5){
+    for(j in 1:16){
+        obBins[j,i] <- length(buoyData[which(buoyData$OB_DeepHT_m >= bins_WaveHeight[i] & buoyData$OB_DeepHT_m < bins_WaveHeight[i+1] & 
+                                        buoyData$OB.Wave.Direction..deg. >= bins_Direction[j] & 
+                                        buoyData$OB.Wave.Direction..deg. < bins_Direction[j+1]),]$Year)   
+    }
+}
+
+
+pensBins <- matrix(NA, ncol = 5, nrow = 16, byrow = TRUE)
+colnames(pensBins) <- bins_WaveHeight[1:5]
+rownames(pensBins) <- bins_Direction[1:16]
+
+for(i in 1:5){
+    for(j in 1:16){
+        pensBins[j,i] <- length(buoyData[which(buoyData$Pens_DeepHT_m >= bins_WaveHeight[i] & buoyData$Pens_DeepHT_m < bins_WaveHeight[i+1] & 
+                                        buoyData$Pens.Wave.Direction..deg. >= bins_Direction[j] & 
+                                        buoyData$Pens.Wave.Direction..deg. < bins_Direction[j+1]),]$Year)   
+    }
+}
+
+wtBins <- matrix(NA, ncol = 5, nrow = 16, byrow = TRUE)
+colnames(wtBins) <- bins_WaveHeight[1:5]
+rownames(wtBins) <- bins_Direction[1:16]
+
+for(i in 1:5){
+    for(j in 1:16){
+        wtBins[j,i] <- length(buoyData[which(buoyData$WT_DeepHT_m >= bins_WaveHeight[i] & buoyData$WT_DeepHT_m < bins_WaveHeight[i+1] & 
+                                        buoyData$WT.Wave.Direction..deg. >= bins_Direction[j] & 
+                                        buoyData$WT.Wave.Direction..deg. < bins_Direction[j+1]),]$Year)   
+    }
+}
+
+kable(round(obBins/sum(obBins), 3), caption = "Proportion of Observations - Orange Beach #42012")
+kable(round(pensBins/sum(pensBins), 3), caption = "Proportion of Observations - Pensacola #42039")
+kable(round(wtBins/sum(wtBins), 3), caption = "Proportion of Observations - West Tampa #42036")
+
+```
+  
+***  
+***  
+  
+## Nesting Season Only - Hourly Data  
+  
+Below are visualizations of wave height and dominant wave period only during the nesting season (May through October). Mean wave heights (0.724-0.841 m) were depressed compared to full-year averages while wave periods were largely unaffected (5.215-5.553 sec). Median values are lower than mean values (0.590-0.650 m high, 5.00-5.26 sec long) due to the effect of large wave height/period observations during storms. Note that the maximum observed wave height and wavelengths were recorded during the nesting season.  
+  
+```{r visualization_nest_1, fig.width = 12, fig.height = 9}
+
+buoyData_Nest <- buoyData %>%
+  filter(Turtle.Season == "Yes")
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(3, 1))
+plot(buoyData_Nest$Date.Time..GMT., buoyData_Nest$OB_DeepHT_m, xlab = "Date", ylim = c(0, 12),
+     ylab = "Wave Height (m)", type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Orange Beach #42012")
+plot(buoyData_Nest$Date.Time..GMT., buoyData_Nest$Pens_DeepHT_m, xlab = "Date", ylim = c(0, 12),
+     ylab = "Wave Height (m)", type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Pensacola #42039")
+plot(buoyData_Nest$Date.Time..GMT., buoyData_Nest$WT_DeepHT_m, xlab = "Date", ylim = c(0, 12),
+     ylab = "Wave Height (m)", type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "West Tampa #42036")
+
+```
+  
+```{r visualization_nest_2, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(density(buoyData_Nest$OB_DeepHT_m, na.rm = TRUE), ylim = c(0, 1.6), xlab = "Wave Height (m)", xlim = c(0, 12), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "black", main = "Wave Height Distribution")
+par(new = TRUE)
+plot(density(buoyData_Nest$Pens_DeepHT_m, na.rm = TRUE), ylim = c(0, 1.6), xlab = "", xlim = c(0, 12), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(density(buoyData_Nest$WT_DeepHT_m, na.rm = TRUE), ylim = c(0, 1.6), xlab = "", xlim = c(0, 12), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "blue", main = "")
+legend("topright", legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), bty = 'n')
+par(new = FALSE)
+
+plot(density(buoyData_Nest$OB_DeepHT_m, na.rm = TRUE), ylim = c(0, 1.6), xlab = "Wave Height (m)", xlim = c(0, 4), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "black", main = "Wave Height Distribution")
+par(new = TRUE)
+plot(density(buoyData_Nest$Pens_DeepHT_m, na.rm = TRUE), ylim = c(0, 1.6), xlab = "", xlim = c(0, 4), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(density(buoyData_Nest$WT_DeepHT_m, na.rm = TRUE), ylim = c(0, 1.6), xlab = "", xlim = c(0, 4), lwd = 2, cex.axis = 1.2, 
+     cex.lab = 1.3, col = "blue", main = "")
+legend("topright", legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), bty = 'n')
+par(new = FALSE)
+
+```
+  
+```{r visualization_nest_3, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(ecdf(buoyData_Nest$OB_DeepHT_m), xlab = "Wave Height (m)", xlim = c(0, 12), ylab = "Cumulative Proportion", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "black", main = "Wave Height ECDF")
+par(new = TRUE)
+plot(ecdf(buoyData_Nest$Pens_DeepHT_m), xlab = "Wave Height (m)", xlim = c(0, 12), ylab = "Cumulative Proportion", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "red", main = "")
+par(new = TRUE)
+plot(ecdf(buoyData_Nest$WT_DeepHT_m), xlab = "Wave Height (m)", xlim = c(0, 12), ylab = "Cumulative Proportion", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "blue", main = "")
+legend(x = 8, y = 0.9, legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), bty = 'n')
+par(new = FALSE)
+
+plot(ecdf(buoyData_Nest$OB_DeepHT_m), xlab = "Wave Height (m)", xlim = c(0, 3.5), ylab = "Cumulative Proportion", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "black", main = "Wave Height ECDF")
+par(new = TRUE)
+plot(ecdf(buoyData_Nest$Pens_DeepHT_m), xlab = "Wave Height (m)", xlim = c(0, 3.5), ylab = "Cumulative Proportion", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "red", main = "")
+par(new = TRUE)
+plot(ecdf(buoyData_Nest$WT_DeepHT_m), xlab = "Wave Height (m)", xlim = c(0, 3.5), ylab = "Cumulative Proportion", cex.axis = 1.2, cex.lab = 1.3, 
+     col = "blue", main = "")
+legend(x = 2.35, y = 0.9, legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), bty = 'n')
+par(new = FALSE)
+
+```
+  
+```{r visualization_nest_4, fig.width = 12, fig.height = 9}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(3, 1))
+plot(buoyData_Nest$Date.Time..GMT., buoyData_Nest$OB.Dominant.Wave.Period..sec., xlab = "Date", ylim = c(0, 25),
+     ylab = "Wave Period (sec)", type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Orange Beach #42012")
+plot(buoyData_Nest$Date.Time..GMT., buoyData_Nest$Pens.Dominant.Wave.Period..sec., xlab = "Date", ylim = c(0, 25),
+     ylab = "Wave Period (sec)", type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "Pensacola #42039")
+plot(buoyData_Nest$Date.Time..GMT., buoyData_Nest$Pens.Dominant.Wave.Period..sec., xlab = "Date", ylim = c(0, 25),
+     ylab = "Wave Period (sec)", type = "l", lwd = 1, cex.axis = 1.2, cex.lab = 1.3, main = "West Tampa #42036")
+
+```
+  
+```{r visualization_nest_5, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(density(buoyData_Nest$OB.Dominant.Wave.Period..sec., na.rm = TRUE), ylim = c(0, 0.31), xlab = "Wave Period (sec)", 
+     xlim = c(0, 25), lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Dominant Wave Period Distribution")
+par(new = TRUE)
+plot(density(buoyData_Nest$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), ylim = c(0, 0.31), xlab = "", xlim = c(0, 25), lwd = 2, 
+     cex.axis = 1.2, cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(density(buoyData_Nest$WT.Dominant.Wave.Period..sec., na.rm = TRUE), ylim = c(0, 0.31), xlab = "", xlim = c(0, 25), lwd = 2, 
+     cex.axis = 1.2, cex.lab = 1.3, col = "blue", main = "")
+legend("topright", legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), bty = 'n')
+par(new = FALSE)
+
+plot(density(buoyData_Nest$OB.Dominant.Wave.Period..sec., na.rm = TRUE), ylim = c(0, 0.31), xlab = "Wave Period (sec)", xlim = c(0, 13), 
+     lwd = 2, cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Dominant Wave Period Distribution")
+par(new = TRUE)
+plot(density(buoyData_Nest$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), ylim = c(0, 0.31), xlab = "", xlim = c(0, 13), lwd = 2, 
+     cex.axis = 1.2, cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(density(buoyData_Nest$WT.Dominant.Wave.Period..sec., na.rm = TRUE), ylim = c(0, 0.31), xlab = "", xlim = c(0, 13), lwd = 2, 
+     cex.axis = 1.2, cex.lab = 1.3, col = "blue", main = "")
+legend("topright", legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), bty = 'n')
+par(new = FALSE)
+
+```
+  
+```{r visualization_nest_6, fig.width = 7, fig.height = 8}
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+plot(ecdf(buoyData_Nest$OB.Dominant.Wave.Period..sec.), xlab = "Wave Period (sec)", xlim = c(0, 25), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Dominant Wave Period ECDF")
+par(new = TRUE)
+plot(ecdf(buoyData_Nest$Pens.Dominant.Wave.Period..sec.), xlab = "Wave Period (sec)", xlim = c(0, 25), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(ecdf(buoyData_Nest$WT.Dominant.Wave.Period..sec.), xlab = "Wave Period (sec)", xlim = c(0, 25), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "blue", main = "")
+legend(x = 17, y = 0.9, legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), 
+       bty = 'n')
+par(new = FALSE)
+
+plot(ecdf(buoyData_Nest$OB.Dominant.Wave.Period..sec.), xlab = "Wave Period (sec)", xlim = c(0, 13), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "black", main = "Dominant Wave Period ECDF")
+par(new = TRUE)
+plot(ecdf(buoyData_Nest$Pens.Dominant.Wave.Period..sec.), xlab = "Wave Period (sec)", xlim = c(0, 13), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "red", main = "")
+par(new = TRUE)
+plot(ecdf(buoyData_Nest$WT.Dominant.Wave.Period..sec.), xlab = "Wave Period (sec)", xlim = c(0, 13), ylab = "Cumulative Proportion", 
+     cex.axis = 1.2, cex.lab = 1.3, col = "blue", main = "")
+legend(x = 9, y = 0.9, legend = c("Orange Beach #42012", "Pensacola #42039", "West Tampa #42036"), fill = c("black", "red", "blue"), 
+       bty = 'n')
+par(new = FALSE)
+
+```
+  
+Below is a summary of the available oceanographic data from each buoy. Though most waves are between 0.40-0.42 m and 0.88-1.03 m high (25th to 75th percentile) and between 4.00-4.55 sec and 6.25 sec long (25th to 75th percentile), the maximum values reported were highly variable between buoys (6.0-12.0 m high and 23.53-25.00 sec long).  
+  
+```{r summary_nest_OrangeBeach, message = FALSE, warning = FALSE}
+
+summaryVariables <- c("Wave Height (m)", "Wavelength (m)", "Wave Direction (deg)", "Water Temp (deg C)")
+summaryTerms <- c("Mean", "SE", "Median", "N", "Min", "Max", "25th Percentile", "75th Percentile", "2.5th Percentile", "97.5th Percentile")
+
+obWaveDirection_Nest <- density(buoyData_Nest$OB.Wave.Direction..deg., na.rm = TRUE)
+
+obSummaryMean_Nest <- c(round(mean(buoyData_Nest$OB_DeepHT_m, na.rm = TRUE), 3),
+                   round(mean(buoyData_Nest$OB.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   round(obWaveDirection_Nest$x[which.max(obWaveDirection_Nest$y)], 3),
+                   round(mean(buoyData_Nest$OB.Water.Temperature...C., na.rm = TRUE), 2))
+obSummarySE_Nest <- c(round(std.error(buoyData_Nest$OB_DeepHT_m, na.rm = TRUE), 3),
+                   round(std.error(buoyData_Nest$OB.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   NA,
+                   round(std.error(buoyData_Nest$OB.Water.Temperature...C., na.rm = TRUE), 2))
+obSummaryMedian_Nest <- c(round(median(buoyData_Nest$OB_DeepHT_m, na.rm = TRUE), 3),
+                   round(median(buoyData_Nest$OB.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   NA,
+                   round(median(buoyData_Nest$OB.Water.Temperature...C., na.rm = TRUE), 2))
+obSummaryN_Nest <- c(round(length(buoyData_Nest[!is.na(buoyData_Nest$OB_DeepHT_m),]$OB_DeepHT_m), 0),
+                round(length(buoyData_Nest[!is.na(buoyData_Nest$OB.Dominant.Wave.Period..sec.),]$OB.Dominant.Wave.Period..sec.), 0),
+                round(length(buoyData_Nest[!is.na(buoyData_Nest$OB.Wave.Direction..deg.),]$OB.Wave.Direction..deg.), 0),
+                round(length(buoyData_Nest[!is.na(buoyData_Nest$OB.Water.Temperature...C.),]$OB.Water.Temperature...C.), 0))
+obSummaryMin_Nest <- c(round(min(buoyData_Nest$OB_DeepHT_m, na.rm = TRUE), 2),
+                   round(min(buoyData_Nest$OB.Dominant.Wave.Period..sec., na.rm = TRUE), 2),
+                   NA,
+                   round(min(buoyData_Nest$OB.Water.Temperature...C., na.rm = TRUE), 2))
+obSummaryMax_Nest <- c(round(max(buoyData_Nest$OB_DeepHT_m, na.rm = TRUE), 2),
+                   round(max(buoyData_Nest$OB.Dominant.Wave.Period..sec., na.rm = TRUE), 2),
+                   NA,
+                   round(max(buoyData_Nest$OB.Water.Temperature...C., na.rm = TRUE), 2))
+obSummary25_Nest <- c(round(unname(quantile(buoyData_Nest$OB_DeepHT_m, probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$OB.Dominant.Wave.Period..sec., probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(obWaveDirection_Nest, probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$OB.Water.Temperature...C., probs = 0.25, na.rm = TRUE)), 2))
+obSummary75_Nest <- c(round(unname(quantile(buoyData_Nest$OB_DeepHT_m, probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$OB.Dominant.Wave.Period..sec., probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(obWaveDirection_Nest, probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$OB.Water.Temperature...C., probs = 0.75, na.rm = TRUE)), 2))
+obSummary2_5_Nest <- c(round(unname(quantile(buoyData_Nest$OB_DeepHT_m, probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$OB.Dominant.Wave.Period..sec., probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(obWaveDirection_Nest, probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$OB.Water.Temperature...C., probs = 0.025, na.rm = TRUE)), 2))
+obSummary97_5_Nest <- c(round(unname(quantile(buoyData_Nest$OB_DeepHT_m, probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$OB.Dominant.Wave.Period..sec., probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(obWaveDirection_Nest, probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$OB.Water.Temperature...C., probs = 0.975, na.rm = TRUE)), 2))
+
+obAllSummary_Nest <- as.data.frame(rbind(obSummaryMean_Nest, obSummarySE_Nest, obSummaryMedian_Nest, obSummaryN_Nest, obSummaryMin_Nest, 
+                                         obSummaryMax_Nest, obSummary25_Nest, obSummary75_Nest, obSummary2_5_Nest, obSummary97_5_Nest))
+colnames(obAllSummary_Nest) <- summaryVariables
+rownames(obAllSummary_Nest) <- summaryTerms
+kable(obAllSummary_Nest, caption = "Orange Beach Buoy - Hourly, 2009 to 2019 Nesting Season")
+
+```
+  
+```{r summary_nest_Pensacola, message = FALSE, warning = FALSE}
+
+pensWaveDirection_Nest <- density(buoyData_Nest$Pens.Wave.Direction..deg., na.rm = TRUE)
+
+pensSummaryMean_Nest <- c(round(mean(buoyData_Nest$Pens_DeepHT_m, na.rm = TRUE), 3),
+                   round(mean(buoyData_Nest$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   round(pensWaveDirection_Nest$x[which.max(pensWaveDirection_Nest$y)], 3),
+                   round(mean(buoyData_Nest$Pens.Water.Temperature...C., na.rm = TRUE), 2))
+pensSummarySE_Nest <- c(round(std.error(buoyData_Nest$Pens_DeepHT_m, na.rm = TRUE), 3),
+                   round(std.error(buoyData_Nest$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   NA,
+                   round(std.error(buoyData_Nest$Pens.Water.Temperature...C., na.rm = TRUE), 2))
+pensSummaryMedian_Nest <- c(round(median(buoyData_Nest$Pens_DeepHT_m, na.rm = TRUE), 3),
+                   round(median(buoyData_Nest$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   NA,
+                   round(median(buoyData_Nest$Pens.Water.Temperature...C., na.rm = TRUE), 2))
+pensSummaryN_Nest <- c(round(length(buoyData_Nest[!is.na(buoyData_Nest$Pens_DeepHT_m),]$Pens_DeepHT_m), 0),
+                round(length(buoyData_Nest[!is.na(buoyData_Nest$Pens.Dominant.Wave.Period..sec.),]$Pens.Dominant.Wave.Period..sec.), 0),
+                round(length(buoyData_Nest[!is.na(buoyData_Nest$Pens.Wave.Direction..deg.),]$Pens.Wave.Direction..deg.), 0),
+                round(length(buoyData_Nest[!is.na(buoyData_Nest$Pens.Water.Temperature...C.),]$Pens.Water.Temperature...C.), 0))
+pensSummaryMin_Nest <- c(round(min(buoyData_Nest$Pens_DeepHT_m, na.rm = TRUE), 2),
+                   round(min(buoyData_Nest$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), 2),
+                   NA,
+                   round(min(buoyData_Nest$Pens.Water.Temperature...C., na.rm = TRUE), 2))
+pensSummaryMax_Nest <- c(round(max(buoyData_Nest$Pens_DeepHT_m, na.rm = TRUE), 2),
+                   round(max(buoyData_Nest$Pens.Dominant.Wave.Period..sec., na.rm = TRUE), 2),
+                   NA,
+                   round(max(buoyData_Nest$Pens.Water.Temperature...C., na.rm = TRUE), 2))
+pensSummary25_Nest <- c(round(unname(quantile(buoyData_Nest$Pens_DeepHT_m, probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$Pens.Dominant.Wave.Period..sec., probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(pensWaveDirection_Nest, probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$Pens.Water.Temperature...C., probs = 0.25, na.rm = TRUE)), 2))
+pensSummary75_Nest <- c(round(unname(quantile(buoyData_Nest$Pens_DeepHT_m, probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$Pens.Dominant.Wave.Period..sec., probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(pensWaveDirection_Nest, probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$Pens.Water.Temperature...C., probs = 0.75, na.rm = TRUE)), 2))
+pensSummary2_5_Nest <- c(round(unname(quantile(buoyData_Nest$Pens_DeepHT_m, probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$Pens.Dominant.Wave.Period..sec., probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(pensWaveDirection_Nest, probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$Pens.Water.Temperature...C., probs = 0.025, na.rm = TRUE)), 2))
+pensSummary97_5_Nest <- c(round(unname(quantile(buoyData_Nest$Pens_DeepHT_m, probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$Pens.Dominant.Wave.Period..sec., probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(pensWaveDirection_Nest, probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$Pens.Water.Temperature...C., probs = 0.975, na.rm = TRUE)), 2))
+
+pensAllSummary_Nest <- as.data.frame(rbind(pensSummaryMean_Nest, pensSummarySE_Nest, pensSummaryMedian_Nest, pensSummaryN_Nest, 
+                                           pensSummaryMin_Nest, pensSummaryMax_Nest, pensSummary25_Nest, pensSummary75_Nest, pensSummary2_5_Nest, pensSummary97_5_Nest))
+colnames(pensAllSummary_Nest) <- summaryVariables
+rownames(pensAllSummary_Nest) <- summaryTerms
+kable(pensAllSummary_Nest, caption = "Pensacola Buoy - Hourly, 1998 to 2019 Nesting Season")
+
+```
+  
+```{r summary_nest_WestTampa, message = FALSE, warning = FALSE}
+
+wtWaveDirection_Nest <- density(buoyData_Nest$WT.Wave.Direction..deg., na.rm = TRUE)
+
+wtSummaryMean_Nest <- c(round(mean(buoyData_Nest$WT_DeepHT_m, na.rm = TRUE), 3),
+                   round(mean(buoyData_Nest$WT.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   round(wtWaveDirection_Nest$x[which.max(wtWaveDirection_Nest$y)], 3),
+                   round(mean(buoyData_Nest$WT.Water.Temperature...C., na.rm = TRUE), 2))
+wtSummarySE_Nest <- c(round(std.error(buoyData_Nest$WT_DeepHT_m, na.rm = TRUE), 3),
+                   round(std.error(buoyData_Nest$WT.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   NA,
+                   round(std.error(buoyData_Nest$WT.Water.Temperature...C., na.rm = TRUE), 2))
+wtSummaryMedian_Nest <- c(round(median(buoyData_Nest$WT_DeepHT_m, na.rm = TRUE), 3),
+                   round(median(buoyData_Nest$WT.Dominant.Wave.Period..sec., na.rm = TRUE), 3),
+                   NA,
+                   round(median(buoyData_Nest$WT.Water.Temperature...C., na.rm = TRUE), 2))
+wtSummaryN_Nest <- c(round(length(buoyData_Nest[!is.na(buoyData_Nest$WT_DeepHT_m),]$WT_DeepHT_m), 0),
+                round(length(buoyData_Nest[!is.na(buoyData_Nest$WT.Dominant.Wave.Period..sec.),]$WT.Dominant.Wave.Period..sec.), 0),
+                round(length(buoyData_Nest[!is.na(buoyData_Nest$WT.Wave.Direction..deg.),]$WT.Wave.Direction..deg.), 0),
+                round(length(buoyData_Nest[!is.na(buoyData_Nest$WT.Water.Temperature...C.),]$WT.Water.Temperature...C.), 0))
+wtSummaryMin_Nest <- c(round(min(buoyData_Nest$WT_DeepHT_m, na.rm = TRUE), 2),
+                   round(min(buoyData_Nest$WT.Dominant.Wave.Period..sec., na.rm = TRUE), 2),
+                   NA,
+                   round(min(buoyData_Nest$WT.Water.Temperature...C., na.rm = TRUE), 2))
+wtSummaryMax_Nest <- c(round(max(buoyData_Nest$WT_DeepHT_m, na.rm = TRUE), 2),
+                   round(max(buoyData_Nest$WT.Dominant.Wave.Period..sec., na.rm = TRUE), 2),
+                   NA,
+                   round(max(buoyData_Nest$WT.Water.Temperature...C., na.rm = TRUE), 2))
+wtSummary25_Nest <- c(round(unname(quantile(buoyData_Nest$WT_DeepHT_m, probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$WT.Dominant.Wave.Period..sec., probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(wtWaveDirection_Nest, probs = 0.25, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$WT.Water.Temperature...C., probs = 0.25, na.rm = TRUE)), 2))
+wtSummary75_Nest <- c(round(unname(quantile(buoyData_Nest$WT_DeepHT_m, probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$WT.Dominant.Wave.Period..sec., probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(wtWaveDirection_Nest, probs = 0.75, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$WT.Water.Temperature...C., probs = 0.75, na.rm = TRUE)), 2))
+wtSummary2_5_Nest <- c(round(unname(quantile(buoyData_Nest$WT_DeepHT_m, probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$WT.Dominant.Wave.Period..sec., probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(wtWaveDirection_Nest, probs = 0.025, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$WT.Water.Temperature...C., probs = 0.025, na.rm = TRUE)), 2))
+wtSummary97_5_Nest <- c(round(unname(quantile(buoyData_Nest$WT_DeepHT_m, probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$WT.Dominant.Wave.Period..sec., probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(wtWaveDirection_Nest, probs = 0.975, na.rm = TRUE)), 2),
+                 round(unname(quantile(buoyData_Nest$WT.Water.Temperature...C., probs = 0.975, na.rm = TRUE)), 2))
+
+wtAllSummary_Nest <- as.data.frame(rbind(wtSummaryMean_Nest, wtSummarySE_Nest, wtSummaryMedian_Nest, wtSummaryN_Nest, wtSummaryMin_Nest, wtSummaryMax_Nest, 
+                                         wtSummary25_Nest, wtSummary75_Nest, wtSummary2_5_Nest, wtSummary97_5_Nest))
+colnames(wtAllSummary_Nest) <- summaryVariables
+rownames(wtAllSummary_Nest) <- summaryTerms
+kable(wtAllSummary_Nest, caption = "West Tampa - Hourly, 1998 to 2019 Nesting Season")
+
+```
+  
+  
+## Bin wave height and direction conditions by buoy within the nesting season  
+  
+Wave height and direction observations were combined into variable-width bins to classify the most common combinations at each buoy, as above for the full year. During the nesting season, the most populous bin for Orange Beach (7.7%) was Bin 32 (0.5 <= Wave Height (m) < 1.0 & 132.0 <= direction (degrees) < 157.5). For Pensacola and West Tampa, Bin 41 (0 <= Wave Height (m) < 0.5 & 180.0 <= direction (degrees) < 202.5) was the most populous (8.5% and 6.8%, respectively).  
+  
+```{r binning_nest_direction, message = FALSE, warning = FALSE}
+
+bins_WaveHeight <- c(0, 0.5, 1.0, 1.5, 2.0, 12)
+bins_Direction <- seq(from = 0, to = 360, by = 22.5)
+
+bins_Numbered <- matrix(seq(from = 1, to = 80, by = 1), ncol = 5, nrow = 16, byrow = TRUE)
+
+obBins_Nest <- matrix(NA, ncol = 5, nrow = 16, byrow = TRUE)
+colnames(obBins_Nest) <- bins_WaveHeight[1:5]
+rownames(obBins_Nest) <- bins_Direction[1:16]
+
+for(i in 1:5){
+    for(j in 1:16){
+        obBins_Nest[j,i] <- length(buoyData_Nest[which(buoyData_Nest$OB_DeepHT_m >= bins_WaveHeight[i] & 
+                                                         buoyData_Nest$OB_DeepHT_m < bins_WaveHeight[i+1] & 
+                                        buoyData_Nest$OB.Wave.Direction..deg. >= bins_Direction[j] & 
+                                        buoyData_Nest$OB.Wave.Direction..deg. < bins_Direction[j+1]),]$Year)   
+    }
+}
+
+
+pensBins_Nest <- matrix(NA, ncol = 5, nrow = 16, byrow = TRUE)
+colnames(pensBins_Nest) <- bins_WaveHeight[1:5]
+rownames(pensBins_Nest) <- bins_Direction[1:16]
+
+for(i in 1:5){
+    for(j in 1:16){
+        pensBins_Nest[j,i] <- length(buoyData_Nest[which(buoyData_Nest$Pens_DeepHT_m >= bins_WaveHeight[i] & 
+                                                         buoyData_Nest$Pens_DeepHT_m < bins_WaveHeight[i+1] & 
+                                        buoyData_Nest$Pens.Wave.Direction..deg. >= bins_Direction[j] & 
+                                        buoyData_Nest$Pens.Wave.Direction..deg. < bins_Direction[j+1]),]$Year)   
+    }
+}
+
+wtBins_Nest <- matrix(NA, ncol = 5, nrow = 16, byrow = TRUE)
+colnames(wtBins_Nest) <- bins_WaveHeight[1:5]
+rownames(wtBins_Nest) <- bins_Direction[1:16]
+
+for(i in 1:5){
+    for(j in 1:16){
+        wtBins_Nest[j,i] <- length(buoyData_Nest[which(buoyData_Nest$WT_DeepHT_m >= bins_WaveHeight[i] & 
+                                                         buoyData_Nest$WT_DeepHT_m < bins_WaveHeight[i+1] & 
+                                        buoyData_Nest$WT.Wave.Direction..deg. >= bins_Direction[j] & 
+                                        buoyData_Nest$WT.Wave.Direction..deg. < bins_Direction[j+1]),]$Year)   
+    }
+}
+
+kable(round(obBins_Nest/sum(obBins_Nest), 3), caption = "Proportion of Observations - Orange Beach #42012")
+kable(round(pensBins_Nest/sum(pensBins_Nest), 3), caption = "Proportion of Observations - Pensacola #42039")
+kable(round(wtBins_Nest/sum(wtBins_Nest), 3), caption = "Proportion of Observations - West Tampa #42036")
+
+```
+  
+  
+## Bin wave height and wave period conditions by buoy within the nesting season  
+  
+Wave height and wave period observations were combined into variable-width bins to classify the most common combinations at each buoy. For wave height, bins were separated every 0.5 m up to 2.0 m, then a catch-all bin up to 12.0 m. For wave period, bins were separated every 1.0 sec from 3.0 sec to 9.0 sec, with catch-all bins from 0.0-3.0 sec and 9.0-25.0 sec. This results in 24 high-resolution bins to cover the majority of the data and 40 bins overall. The majority of Orange Beach observations (13.6%) fall into Bin 17 (0.5 <= Wave Height (m) < 1.0 & 5.0 <= Wave Period (sec) < 6.0). This is the same for Pensacola (15.2%), but not for West Tampa. West Tampa (15.6%) was predominantly in Bin 12 (0.5 <= Wave Height (m) < 1.0 & 4.0 <= Wave Period (sec) < 5.0).  
+  
+```{r binning_nest_waveperiod}
+
+bins_WaveHeight <- c(0, 0.5, 1.0, 1.5, 2.0, 12)
+bins_WavePeriod <- c(0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 25.0)
+
+bins_Numbered <- matrix(seq(from = 1, to = 40, by = 1), ncol = 5, nrow = 8, byrow = TRUE)
+
+obBins_Nest_WHWP <- matrix(NA, ncol = 5, nrow = 8, byrow = TRUE)
+colnames(obBins_Nest_WHWP) <- bins_WaveHeight[1:5]
+rownames(obBins_Nest_WHWP) <- bins_WavePeriod[1:8]
+
+for(i in 1:5){
+  for(j in 1:8){
+    obBins_Nest_WHWP[j,i] <- length(buoyData_Nest[which(buoyData_Nest$OB_DeepHT_m >= bins_WaveHeight[i] & 
+                                                          buoyData_Nest$OB_DeepHT_m < bins_WaveHeight[i+1] &
+                              buoyData_Nest$OB.Dominant.Wave.Period..sec. >= bins_WavePeriod[j] & 
+                                buoyData_Nest$OB.Dominant.Wave.Period..sec. < bins_WavePeriod[j+1]),]$Year)
+  }
+}
+
+
+pensBins_Nest_WHWP <- matrix(NA, ncol = 5, nrow = 8, byrow = TRUE)
+colnames(pensBins_Nest_WHWP) <- bins_WaveHeight[1:5]
+rownames(pensBins_Nest_WHWP) <- bins_WavePeriod[1:8]
+
+for(i in 1:5){
+  for(j in 1:8){
+    pensBins_Nest_WHWP[j,i] <- length(buoyData_Nest[which(buoyData_Nest$Pens_DeepHT_m >= bins_WaveHeight[i] & 
+                                                            buoyData_Nest$Pens_DeepHT_m < bins_WaveHeight[i+1] &
+                              buoyData_Nest$Pens.Dominant.Wave.Period..sec. >= bins_WavePeriod[j] & 
+                                buoyData_Nest$Pens.Dominant.Wave.Period..sec. < bins_WavePeriod[j+1]),]$Year)
+  }
+}
+
+
+wtBins_Nest_WHWP <- matrix(NA, ncol = 5, nrow = 8, byrow = TRUE)
+colnames(wtBins_Nest_WHWP) <- bins_WaveHeight[1:5]
+rownames(wtBins_Nest_WHWP) <- bins_WavePeriod[1:8]
+
+for(i in 1:5){
+  for(j in 1:8){
+    wtBins_Nest_WHWP[j,i] <- length(buoyData_Nest[which(buoyData_Nest$WT_DeepHT_m >= bins_WaveHeight[i] & 
+                                                            buoyData_Nest$WT_DeepHT_m < bins_WaveHeight[i+1] &
+                              buoyData_Nest$WT.Dominant.Wave.Period..sec. >= bins_WavePeriod[j] & 
+                                buoyData_Nest$WT.Dominant.Wave.Period..sec. < bins_WavePeriod[j+1]),]$Year)
+  }
+}
+
+kable(round(obBins_Nest_WHWP/sum(obBins_Nest_WHWP), 3), caption = "Proportion of Observations - Orange Beach #42012")
+kable(round(pensBins_Nest_WHWP/sum(pensBins_Nest_WHWP), 3), caption = "Proportion of Observations - Pensacola #42039")
+kable(round(wtBins_Nest_WHWP/sum(wtBins_Nest_WHWP), 3), caption = "Proportion of Observations - West Tampa #42036")
+
+```
+  
+***  
+***  
+  
+## Intra-Annual Distributions  
+  
+Below is the monthly and weekly mean wave height and wave period at each buoy derived from the hourly data. Note the increasing trend in wave height late in the nesting season, corresponding with typical hatchling emergence, and the oscillation in wave period throughout the nesting season.  
+  
+```{r monthly_waveheight, fig.height = 4, fig.width = 7}
+
+Months <- seq(from = 1, to = 12, by = 1)
+
+obMonth_HT_mean <- NULL
+obMonth_HT_se <- NULL
+pensMonth_HT_mean <- NULL
+pensMonth_HT_se <- NULL
+wtMonth_HT_mean <- NULL
+wtMonth_HT_se <- NULL
+
+for(i in Months){
+  obMonth_HT_mean[i] <- mean(buoyData[buoyData$Month == i,]$OB_DeepHT_m, na.rm = TRUE)
+  obMonth_HT_se[i] <- std.error(buoyData[buoyData$Month == i,]$OB_DeepHT_m, na.rm = TRUE)
+  pensMonth_HT_mean[i] <- mean(buoyData[buoyData$Month == i,]$Pens_DeepHT_m, na.rm = TRUE)
+  pensMonth_HT_se[i] <- std.error(buoyData[buoyData$Month == i,]$Pens_DeepHT_m, na.rm = TRUE)
+  wtMonth_HT_mean[i] <- mean(buoyData[buoyData$Month == i,]$WT_DeepHT_m, na.rm = TRUE)
+  wtMonth_HT_se[i] <- std.error(buoyData[buoyData$Month == i,]$WT_DeepHT_m, na.rm = TRUE)
+}
+
+monthlyMeans_HT <- data.frame(cbind("Month" = Months, "OB Wave Height - mean" = obMonth_HT_mean, "OB Wave Height - SE" = obMonth_HT_se,
+                                 "Pens Wave Height - mean" = pensMonth_HT_mean, "Pens Wave Height - SE" = pensMonth_HT_se,
+                                 "WT Wave Height - mean" = wtMonth_HT_mean, "WT Wave Height - SE" = wtMonth_HT_se))
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5))
+
+plot(monthlyMeans_HT$Month, monthlyMeans_HT$OB.Wave.Height...mean, xlab = "Month", ylab = "Mean Wave Height (m)", ylim = c(0.5, 1.4), 
+     type = 'l', lwd = 2, col = "black", cex.axis = 1.2, cex.lab = 1.1, main = "Monthly Mean Wave Height")
+lines(monthlyMeans_HT$Month, monthlyMeans_HT$OB.Wave.Height...mean + (1.96 * monthlyMeans_HT$OB.Wave.Height...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 0, alpha = 0.35))
+lines(monthlyMeans_HT$Month, monthlyMeans_HT$OB.Wave.Height...mean - (1.96 * monthlyMeans_HT$OB.Wave.Height...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 0, alpha = 0.35))
+lines(monthlyMeans_HT$Month, monthlyMeans_HT$Pens.Wave.Height...mean, lty = 1, lwd = 2, col = "red")
+lines(monthlyMeans_HT$Month, monthlyMeans_HT$Pens.Wave.Height...mean + (1.96 * monthlyMeans_HT$Pens.Wave.Height...SE), lty = 2, lwd = 1, 
+      col = rgb(1, 0, 0, alpha = 0.35))
+lines(monthlyMeans_HT$Month, monthlyMeans_HT$Pens.Wave.Height...mean - (1.96 * monthlyMeans_HT$Pens.Wave.Height...SE), lty = 2, lwd = 1, 
+      col = rgb(1, 0, 0, alpha = 0.35))
+lines(monthlyMeans_HT$Month, monthlyMeans_HT$WT.Wave.Height...mean, lty = 1, lwd = 2, col = "blue")
+lines(monthlyMeans_HT$Month, monthlyMeans_HT$WT.Wave.Height...mean + (1.96 * monthlyMeans_HT$WT.Wave.Height...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 1, alpha = 0.35))
+lines(monthlyMeans_HT$Month, monthlyMeans_HT$WT.Wave.Height...mean - (1.96 * monthlyMeans_HT$WT.Wave.Height...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 1, alpha = 0.35))
+legend("top", legend = c("Orange Beach", "Pensacola", "West Tampa", "Nesting Season"), fill = c("black", "red", "blue", "grey"), bty = 'n', 
+       horiz = TRUE)
+rect(xleft = 5, ybottom = 0.53, xright = 10, ytop = 1.25, col = rgb(90, 90, 90, alpha = 35, maxColorValue = 255), border = FALSE)
+
+
+```
+  
+```{r monthly_waveperiod, fig.height = 4, fig.width = 7}
+
+obMonth_WP_mean <- NULL
+obMonth_WP_se <- NULL
+pensMonth_WP_mean <- NULL
+pensMonth_WP_se <- NULL
+wtMonth_WP_mean <- NULL
+wtMonth_WP_se <- NULL
+
+for(i in Months){
+  obMonth_WP_mean[i] <- mean(buoyData[buoyData$Month == i,]$OB.Dominant.Wave.Period..sec., na.rm = TRUE)
+  obMonth_WP_se[i] <- std.error(buoyData[buoyData$Month == i,]$OB.Dominant.Wave.Period..sec., na.rm = TRUE)
+  pensMonth_WP_mean[i] <- mean(buoyData[buoyData$Month == i,]$Pens.Dominant.Wave.Period..sec., na.rm = TRUE)
+  pensMonth_WP_se[i] <- std.error(buoyData[buoyData$Month == i,]$Pens.Dominant.Wave.Period..sec., na.rm = TRUE)
+  wtMonth_WP_mean[i] <- mean(buoyData[buoyData$Month == i,]$WT.Dominant.Wave.Period..sec., na.rm = TRUE)
+  wtMonth_WP_se[i] <- std.error(buoyData[buoyData$Month == i,]$WT.Dominant.Wave.Period..sec., na.rm = TRUE)
+}
+
+monthlyMeans_WP <- data.frame(cbind("Month" = Months, "OB Wave Period - mean" = obMonth_WP_mean, "OB Wave Period - SE" = obMonth_WP_se,
+                                 "Pens Wave Period - mean" = pensMonth_WP_mean, "Pens Wave Period - SE" = pensMonth_WP_se,
+                                 "WT Wave Period - mean" = wtMonth_WP_mean, "WT Wave Period - SE" = wtMonth_WP_se))
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5))
+
+plot(monthlyMeans_WP$Month, monthlyMeans_WP$OB.Wave.Period...mean, xlab = "Month", ylab = "Mean Wave Period (sec)", ylim = c(4.75, 6.25), 
+     type = 'l', lwd = 2, col = "black", cex.axis = 1.2, cex.lab = 1.1, main = "Monthly Average")
+lines(monthlyMeans_WP$Month, monthlyMeans_WP$OB.Wave.Period...mean + (1.96 * monthlyMeans_WP$OB.Wave.Period...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 0, alpha = 0.35))
+lines(monthlyMeans_WP$Month, monthlyMeans_WP$OB.Wave.Period...mean - (1.96 * monthlyMeans_WP$OB.Wave.Period...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 0, alpha = 0.35))
+lines(monthlyMeans_WP$Month, monthlyMeans_WP$Pens.Wave.Period...mean, lty = 1, lwd = 2, col = "red")
+lines(monthlyMeans_WP$Month, monthlyMeans_WP$Pens.Wave.Period...mean + (1.96 * monthlyMeans_WP$Pens.Wave.Period...SE), lty = 2, lwd = 1, 
+      col = rgb(1, 0, 0, alpha = 0.35))
+lines(monthlyMeans_WP$Month, monthlyMeans_WP$Pens.Wave.Period...mean - (1.96 * monthlyMeans_WP$Pens.Wave.Period...SE), lty = 2, lwd = 1, 
+      col = rgb(1, 0, 0, alpha = 0.35))
+lines(monthlyMeans_WP$Month, monthlyMeans_WP$WT.Wave.Period...mean, lty = 1, lwd = 2, col = "blue")
+lines(monthlyMeans_WP$Month, monthlyMeans_WP$WT.Wave.Period...mean + (1.96 * monthlyMeans_WP$WT.Wave.Period...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 1, alpha = 0.35))
+lines(monthlyMeans_WP$Month, monthlyMeans_WP$WT.Wave.Period...mean - (1.96 * monthlyMeans_WP$WT.Wave.Period...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 1, alpha = 0.35))
+legend("top", legend = c("Orange Beach", "Pensacola", "West Tampa", "Nesting Season"), fill = c("black", "red", "blue", "grey"), bty = 'n', 
+       horiz = TRUE)
+rect(xleft = 5, ybottom = 4.7, xright = 10, ytop = 6.05, col = rgb(90, 90, 90, alpha = 35, maxColorValue = 255), border = FALSE)
+
+```
+  
+```{r weekly_waveheight, fig.height = 8, fig.width = 7}
+
+Weeks <- seq(from = 1, to = 53, by = 1)
+
+obWeek_HT_mean <- NULL
+obWeek_HT_se <- NULL
+pensWeek_HT_mean <- NULL
+pensWeek_HT_se <- NULL
+wtWeek_HT_mean <- NULL
+wtWeek_HT_se <- NULL
+
+for(i in Weeks){
+  obWeek_HT_mean[i] <- mean(buoyData[buoyData$Week == i,]$OB_DeepHT_m, na.rm = TRUE)
+  obWeek_HT_se[i] <- std.error(buoyData[buoyData$Week == i,]$OB_DeepHT_m, na.rm = TRUE)
+  pensWeek_HT_mean[i] <- mean(buoyData[buoyData$Week == i,]$Pens_DeepHT_m, na.rm = TRUE)
+  pensWeek_HT_se[i] <- std.error(buoyData[buoyData$Week == i,]$Pens_DeepHT_m, na.rm = TRUE)
+  wtWeek_HT_mean[i] <- mean(buoyData[buoyData$Week == i,]$WT_DeepHT_m, na.rm = TRUE)
+  wtWeek_HT_se[i] <- std.error(buoyData[buoyData$Week == i,]$WT_DeepHT_m, na.rm = TRUE)
+}
+
+weeklyMeans_HT <- data.frame(cbind("Week" = Weeks, "OB Wave Height - mean" = obWeek_HT_mean, "OB Wave Height - SE" = obWeek_HT_se,
+                                 "Pens Wave Height - mean" = pensWeek_HT_mean, "Pens Wave Height - SE" = pensWeek_HT_se,
+                                 "WT Wave Height - mean" = wtWeek_HT_mean, "WT Wave Height - SE" = wtWeek_HT_se))
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+
+plot(weeklyMeans_HT$Week, weeklyMeans_HT$OB.Wave.Height...mean, xlab = "Week", ylab = "Mean Wave Height (m)", ylim = c(0.5, 1.5), type = 'l', 
+     lwd = 2, col = "black", cex.axis = 1.2, cex.lab = 1.1, main = "Weekly Average")
+lines(weeklyMeans_HT$Week, weeklyMeans_HT$OB.Wave.Height...mean + (1.96 * weeklyMeans_HT$OB.Wave.Height...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 0, alpha = 0.35))
+lines(weeklyMeans_HT$Week, weeklyMeans_HT$OB.Wave.Height...mean - (1.96 * weeklyMeans_HT$OB.Wave.Height...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 0, alpha = 0.35))
+lines(weeklyMeans_HT$Week, weeklyMeans_HT$Pens.Wave.Height...mean, lty = 1, lwd = 2, col = "red")
+lines(weeklyMeans_HT$Week, weeklyMeans_HT$Pens.Wave.Height...mean + (1.96 * weeklyMeans_HT$Pens.Wave.Height...SE), lty = 2, lwd = 1, 
+      col = rgb(1, 0, 0, alpha = 0.35))
+lines(weeklyMeans_HT$Week, weeklyMeans_HT$Pens.Wave.Height...mean - (1.96 * weeklyMeans_HT$Pens.Wave.Height...SE), lty = 2, lwd = 1, 
+      col = rgb(1, 0, 0, alpha = 0.35))
+lines(weeklyMeans_HT$Week, weeklyMeans_HT$WT.Wave.Height...mean, lty = 1, lwd = 2, col = "blue")
+lines(weeklyMeans_HT$Week, weeklyMeans_HT$WT.Wave.Height...mean + (1.96 * weeklyMeans_HT$WT.Wave.Height...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 1, alpha = 0.35))
+lines(weeklyMeans_HT$Week, weeklyMeans_HT$WT.Wave.Height...mean - (1.96 * weeklyMeans_HT$WT.Wave.Height...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 1, alpha = 0.35))
+legend("top", legend = c("Orange Beach", "Pensacola", "West Tampa", "Nesting Season"), fill = c("black", "red", "blue", "grey"), bty = 'n', 
+       horiz = TRUE)
+rect(xleft = 18, ybottom = 0.48, xright = 44, ytop = 1.35, col = rgb(90, 90, 90, alpha = 35, maxColorValue = 255), border = FALSE)
+
+plot(smooth.spline(weeklyMeans_HT$Week, weeklyMeans_HT$OB.Wave.Height...mean), xlab = "Week", ylab = "Mean Wave Height (m)", 
+     ylim = c(0.5, 1.5), type = 'l', lwd = 2, col = "black", cex.axis = 1.2, cex.lab = 1.1, main = "Cubic Spline")
+lines(smooth.spline(weeklyMeans_HT$Week, weeklyMeans_HT$Pens.Wave.Height...mean), lwd = 2, col = "red")
+lines(smooth.spline(weeklyMeans_HT$Week, weeklyMeans_HT$WT.Wave.Height...mean), lwd = 2, col = "blue")
+legend("top", legend = c("Orange Beach", "Pensacola", "West Tampa", "Nesting Season"), fill = c("black", "red", "blue", "grey"), bty = 'n', 
+       horiz = TRUE)
+rect(xleft = 18, ybottom = 0.5, xright = 44, ytop = 1.35, col = rgb(90, 90, 90, alpha = 35, maxColorValue = 255), border = FALSE)
+
+```
+  
+```{r weekly_wavePeriod, fig.height = 8, fig.width = 7}
+
+obWeek_WP_mean <- NULL
+obWeek_WP_se <- NULL
+pensWeek_WP_mean <- NULL
+pensWeek_WP_se <- NULL
+wtWeek_WP_mean <- NULL
+wtWeek_WP_se <- NULL
+
+for(i in Weeks){
+  obWeek_WP_mean[i] <- mean(buoyData[buoyData$Week == i,]$OB.Dominant.Wave.Period..sec., na.rm = TRUE)
+  obWeek_WP_se[i] <- std.error(buoyData[buoyData$Week == i,]$OB.Dominant.Wave.Period..sec., na.rm = TRUE)
+  pensWeek_WP_mean[i] <- mean(buoyData[buoyData$Week == i,]$Pens.Dominant.Wave.Period..sec., na.rm = TRUE)
+  pensWeek_WP_se[i] <- std.error(buoyData[buoyData$Week == i,]$Pens.Dominant.Wave.Period..sec., na.rm = TRUE)
+  wtWeek_WP_mean[i] <- mean(buoyData[buoyData$Week == i,]$WT.Dominant.Wave.Period..sec., na.rm = TRUE)
+  wtWeek_WP_se[i] <- std.error(buoyData[buoyData$Week == i,]$WT.Dominant.Wave.Period..sec., na.rm = TRUE)
+}
+
+weeklyMeans_WP <- data.frame(cbind("Week" = Weeks, "OB Wave Period - mean" = obWeek_WP_mean, "OB Wave Period - SE" = obWeek_WP_se,
+                                 "Pens Wave Period - mean" = pensWeek_WP_mean, "Pens Wave Period - SE" = pensWeek_WP_se,
+                                 "WT Wave Period - mean" = wtWeek_WP_mean, "WT Wave Period - SE" = wtWeek_WP_se))
+
+par(family = "serif", mar = c(4.5, 4.5, 2, 0.5), mfrow = c(2, 1))
+
+plot(weeklyMeans_WP$Week, weeklyMeans_WP$OB.Wave.Period...mean, xlab = "Week", ylab = "Mean Wave Period (sec)", ylim = c(4.50, 6.50), 
+     type = 'l', lwd = 2, col = "black", cex.axis = 1.2, cex.lab = 1.1, main = "Weekly Average")
+lines(weeklyMeans_WP$Week, weeklyMeans_WP$OB.Wave.Period...mean + (1.96 * weeklyMeans_WP$OB.Wave.Period...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 0, alpha = 0.35))
+lines(weeklyMeans_WP$Week, weeklyMeans_WP$OB.Wave.Period...mean - (1.96 * weeklyMeans_WP$OB.Wave.Period...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 0, alpha = 0.35))
+lines(weeklyMeans_WP$Week, weeklyMeans_WP$Pens.Wave.Period...mean, lty = 1, lwd = 2, col = "red")
+lines(weeklyMeans_WP$Week, weeklyMeans_WP$Pens.Wave.Period...mean + (1.96 * weeklyMeans_WP$Pens.Wave.Period...SE), lty = 2, lwd = 1, 
+      col = rgb(1, 0, 0, alpha = 0.35))
+lines(weeklyMeans_WP$Week, weeklyMeans_WP$Pens.Wave.Period...mean - (1.96 * weeklyMeans_WP$Pens.Wave.Period...SE), lty = 2, lwd = 1, 
+      col = rgb(1, 0, 0, alpha = 0.35))
+lines(weeklyMeans_WP$Week, weeklyMeans_WP$WT.Wave.Period...mean, lty = 1, lwd = 2, col = "blue")
+lines(weeklyMeans_WP$Week, weeklyMeans_WP$WT.Wave.Period...mean + (1.96 * weeklyMeans_WP$WT.Wave.Period...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 1, alpha = 0.35))
+lines(weeklyMeans_WP$Week, weeklyMeans_WP$WT.Wave.Period...mean - (1.96 * weeklyMeans_WP$WT.Wave.Period...SE), lty = 2, lwd = 1, 
+      col = rgb(0, 0, 1, alpha = 0.35))
+legend("top", legend = c("Orange Beach", "Pensacola", "West Tampa", "Nesting Season"), fill = c("black", "red", "blue", "grey"), bty = 'n', 
+       horiz = TRUE)
+rect(xleft = 18, ybottom = 4.45, xright = 44, ytop = 6.30, col = rgb(90, 90, 90, alpha = 35, maxColorValue = 255), border = FALSE)
+
+plot(smooth.spline(weeklyMeans_WP$Week, weeklyMeans_WP$OB.Wave.Period...mean), xlab = "Week", ylab = "Mean Wave Period (sec)", 
+     ylim = c(4.50, 6.50), type = 'l', lwd = 2, col = "black", cex.axis = 1.2, cex.lab = 1.1, main = "Cubic Spline")
+lines(smooth.spline(weeklyMeans_WP$Week, weeklyMeans_WP$Pens.Wave.Period...mean), lwd = 2, col = "red")
+lines(smooth.spline(weeklyMeans_WP$Week, weeklyMeans_WP$WT.Wave.Period...mean), lwd = 2, col = "blue")
+legend("top", legend = c("Orange Beach", "Pensacola", "West Tampa", "Nesting Season"), fill = c("black", "red", "blue", "grey"), bty = 'n', 
+       horiz = TRUE)
+rect(xleft = 18, ybottom = 4.45, xright = 44, ytop = 6.30, col = rgb(90, 90, 90, alpha = 35, maxColorValue = 255), border = FALSE)
+
+```
+  
+  
