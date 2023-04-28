@@ -22,9 +22,10 @@ library(viridis)
 library(rjags)
 
 
-
-skin<-read.csv("C:/Users/15134/Documents/Thesis/Lk_C&N_2Lifestages.csv") #load data
+skin<-read.csv("LK_SIA_Data.csv") #load data
 summary(skin) #check skin import
+
+colnames(skin)[1] <- gsub('^...','',colnames(skin)[1])
 
 skin_factors<-c("TurtleID", 
                 "LifeStage") #select appropriate vars to convert into factors for skin data

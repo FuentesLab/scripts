@@ -23,7 +23,8 @@ library(forcats)
 
 
 ####Read in data #####
-skin<-read.csv("C:/Users/15134/Documents/Thesis/PooledSampleLk.csv") #load skin data
+skin<-read.csv("LK_SIA_Data.csv") #load skin data
+colnames(skin)[1] <- gsub('^...','',colnames(skin)[1])
 
 
 summary(skin) #check skin import
@@ -110,22 +111,7 @@ ggarrange(SCL_C, Weight_C, cBCI, SCL_N, Weight_N, nBCI,
 ############################################################################
 
 
-small <- read.csv("C:/Users/15134/Documents/Thesis/SMALL_Lk_C&N_2LifeStages.csv")
-
-summary(small) #check small import
-
-small_factors<-c("TurtleID",
-                "LifeStage") #select appropriate vars to convert into factors for small data
-small[small_factors]<-lapply(small[small_factors], as.factor) #convert selected vars to factors
-
-
-small_nums<-c( "SCL",
-              "d15N",
-              "Weight",
-              "BCI",
-              "d13C")
-
-small[small_nums]<-lapply(small[small_nums], as.numeric)
+small <- skin [which(skin$LifeStage=='Small'),]
 summary(small)
 head(small)
 
@@ -191,22 +177,7 @@ ggarrange(SCL_C, Weight_C, cBCI, SCL_N, Weight_N, nBCI,
 ############################################################################
 
 
-large <- read.csv("C:/Users/15134/Documents/Thesis/LARGE_Lk_C&N_2LifeStages.csv")
-
-summary(large) #check large import
-
-large_factors<-c("TurtleID",
-                 "LifeStage") #select appropriate vars to convert into factors for large data
-large[large_factors]<-lapply(large[large_factors], as.factor) #convert selected vars to factors
-
-
-large_nums<-c( "SCL",
-               "d15N",
-               "Weight",
-               "BCI",
-               "d13C")
-
-large[large_nums]<-lapply(large[large_nums], as.numeric)
+large <- skin [which(skin$LifeStage=='Large'),]
 summary(large)
 head(large)
 
@@ -277,55 +248,59 @@ hist(skin$SCL,
      breaks=c(20,25,30,35,40,45,50,55,60),
      las=1)
 
-skinLARGE<-read.csv("C:/Users/15134/Documents/Thesis/LARGE_Lk_C&N_2LifeStages.csv")
-skinSMALL<-read.csv("C:/Users/15134/Documents/Thesis/SMALL_Lk_C&N_2LifeStages.csv")
+
 ###### Carbon ##########
 library(ggplot2)
 library(ggplotify)
 library(cowplot)
 
-LC<-as.ggplot(~hist(skinLARGE$d13C,
+
+LC<-as.ggplot(~hist(large$d13C,
                     main="Larger Size Class",
                     xlab=expression(delta^13* C * " \u2030"),
                     ylab="Number of individuals",
+                    xlim=c(-17,-11),
                     ylim=c(0,26),
                     cex.lab = 1.2,
                     las=1))
 
 
-SC<-as.ggplot(~hist(skinSMALL$d13C,
+SC<-as.ggplot(~hist(small$d13C,
                     main="Smaller Size Class",
                     breaks=c(-17,-16,-15,-14,-13,-12),
                     xlab=expression(delta^13* C * " \u2030"),
                     ylab="Number of individuals",
-                    xlim=c(-17,-12),
+                    xlim=c(-17,-11),
                     ylim=c(0,7),
                     cex.lab = 1.2,
                     las=1))
 ########## Nitrogen ########
-LN<-as.ggplot(~hist(skinLARGE$d15N,
-                    main=NULL,
-                    xlab=expression(delta^15* N * " \u2030"),
-                    ylab="Number of individuals",
-                    ylim=c(0,20),
-                    cex.lab = 1.2,
-                    las=1))
-
-SN<-as.ggplot(~hist(skinSMALL$d15N,
+LN<-as.ggplot(~hist(large$d15N,
                     breaks=c(5,6,7,8,9,10),
                     main=NULL,
                     xlab=expression(delta^15* N * " \u2030"),
                     ylab="Number of individuals",
+                    xlim=c(4, 14),
+                    cex.lab = 1.2,
+                    las=1))
+
+SN<-as.ggplot(~hist(small$d15N,
+                    breaks=c(5,6,7,8,9,10),
+                    main=NULL,
+                    xlab=expression(delta^15* N * " \u2030"),
+                    ylab="Number of individuals",
+                    xlim=c(4, 14),
                     cex.lab = 1.2,
                     las=1))
 
 
-plot_grid(LC, SC, LN, SN, labels = c("A", "B", "C", "D"), ncol=2, nrow=2)
+FigS1 <- plot_grid(SC, LC, SN, LN, labels = c("A", "B", "C", "D"), ncol=2, nrow=2)
+FigS1
 
-arrange <- plot_grid(LC, SC, LN, SN, labels="auto")
-arrange
+ggsave(filename = "FigS1.eps", FigS1, width = 174, height = 220, units = "mm")
+#dev.off()
 
-
+ggsave(filename = "FigS1.jpg", FigS1, width = 174 , height = 220, units = "mm")
 
 
 

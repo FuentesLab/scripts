@@ -19,7 +19,8 @@ library(hrbrthemes)
 library(viridis)
 library(gridExtra)
 
-initialCR_CN <- read.csv("C:/Users/15134/Documents/Thesis/PooledSampleLk.csv")
+initialCR_CN <- read.csv("LK_SIA_Data.csv")
+colnames(initialCR_CN)[1] <- gsub('^...','',colnames(initialCR_CN)[1])
 
 weight_BCI_data <- initialCR_CN %>%
   drop_na(Weight) #drop NAs for Weight & BCI (body condition index)
@@ -106,7 +107,7 @@ pairs(select(initialCR_CN, d13C, d15N))
 
 ############ Boxplots code ###########
 
-CR_CN<-read.csv("C:/Users/15134/Documents/Thesis/PooledSampleLk.csv")
+CR_CN<-read.csv("LK_SIA_Data.csv")
 
 #boxplots by size class
 # first Carbon
@@ -118,9 +119,12 @@ boxplot(d15N ~ LifeStage, data = CR_CN, xlab = "Size Group", ylab = expression(d
 
 #making them prettier:
 
+CR_CN$LifeStage <- factor(CR_CN$LifeStage, c("Small", "Large"))
+
+
 bpC <- ggplot(CR_CN, aes(x = LifeStage, y = d13C, fill = LifeStage)) +
   stat_boxplot(geom ="errorbar", width = 0.5) +
-  geom_boxplot(fill = "grey", outlier.size = 2) + 
+  geom_boxplot(fill = "grey", outlier.size = 2) +
   ###line below adds the mean, shown as a circle with a cross through it
   stat_summary(fun=mean, geom="point", shape=10, size=5, color="black") +
   theme_bw() + theme(legend.position="none", axis.line = element_line(color='black'),
@@ -131,7 +135,9 @@ bpC <- ggplot(CR_CN, aes(x = LifeStage, y = d13C, fill = LifeStage)) +
                      axis.text.y = element_text(size=12),
                      axis.title.x = element_text(size=14),
                      axis.title.y = element_text(size=14)) +
-  xlab (NULL) + ylab(expression(delta^13* C * "  \u2030"))
+  xlab (NULL) + ylab(expression(delta^13* C * "  \u2030")) +
+  annotate("text", x = -Inf, y = Inf, hjust = 0, vjust = 1,
+           label = "MDiff = -0.86, CI: (-1.41, -0.29)", size = 5)
 
 bpN <- ggplot(CR_CN, aes(x = LifeStage, y = d15N, fill = LifeStage)) +
   stat_boxplot(geom ="errorbar", width = 0.5) +
@@ -145,7 +151,45 @@ bpN <- ggplot(CR_CN, aes(x = LifeStage, y = d15N, fill = LifeStage)) +
                      axis.text.y = element_text(size=12),
                      axis.title.x = element_text(size=14),
                      axis.title.y = element_text(size=14)) +
-  xlab (NULL) + ylab(expression(delta^15* N * "  \u2030"))
+  xlab (NULL) + ylab(expression(delta^15* N * "  \u2030")) +
+  annotate("text", x = -Inf, y = Inf, hjust = 0, vjust = 1,
+           label = "MDiff = 0.73, CI: (0.19, 1.30)", size = 5)
+################################################################################
+bpC <- ggplot(CR_CN, aes(x = LifeStage, y = d13C, fill = LifeStage)) +
+  stat_boxplot(geom ="errorbar", width = 0.5) +
+  geom_boxplot(fill = "grey", outlier.size = 2) +
+  ###line below adds the mean, shown as a circle with a cross through it
+  stat_summary(fun=mean, geom="point", shape=10, size=5, color="black") +
+  theme_bw() + theme(legend.position="none", axis.line = element_line(color='black'),
+                     plot.background = element_blank(),
+                     panel.grid.minor = element_blank(),
+                     panel.grid.major = element_blank(),
+                     axis.text.x = element_text(color="black", size=12),
+                     axis.text.y = element_text(size=12),
+                     axis.title.x = element_text(size=14),
+                     axis.title.y = element_text(size=14)) +
+  xlab (NULL) + ylab(expression(delta^13* C * "  \u2030"))
+
+Clab <- bpC + annotate("text", x = 0.5, y = -11, label = expression(italic("Mdiff")~"="~-0.86~","~italic("CI")~":"~"("~-1.41~","~-0.29~")"),
+                      size = 3.5, hjust = 0, vjust = 1, color = "black")
+
+
+bpN <- ggplot(CR_CN, aes(x = LifeStage, y = d15N, fill = LifeStage)) +
+  stat_boxplot(geom ="errorbar", width = 0.5) +
+  geom_boxplot(fill = "grey", outlier.size = 2) + 
+  stat_summary(fun=mean, geom="point", shape=10, size=5, color="black") + 
+  theme_bw() + theme(legend.position="none", axis.line = element_line(color='black'),
+                     plot.background = element_blank(),
+                     panel.grid.minor = element_blank(),
+                     panel.grid.major = element_blank(),
+                     axis.text.x = element_text(color="black", size=12),
+                     axis.text.y = element_text(size=12),
+                     axis.title.x = element_text(size=14),
+                     axis.title.y = element_text(size=14)) +
+  xlab (NULL) + ylab(expression(delta^15* N * "  \u2030")) 
+
+Nlab <- bpN + annotate("text", x = 0.5, y = 14, label = expression(italic("Mdiff")~"="~0.73~","~italic("CI")~":"~"("~0.19~","~1.30~")"),
+                      size = 3.5, hjust = 0, vjust = 1, color = "black")
 
 
 
@@ -153,6 +197,11 @@ library(grid)
 
 bottom<-textGrob("Size Class", gp = gpar(fontsize=16))
 
-grid.arrange(bpC, bpN, nrow=1, ncol=2, bottom = bottom)
+fig4 <- grid.arrange(Clab, Nlab, nrow=1, ncol=2, bottom = bottom)
+print(fig4)
 
+ggsave(filename = "Fig4.eps", fig4, width = 174, height = 150, units = "mm")
+dev.off()
+
+ggsave(filename = "Fig4.jpg", fig4, width = 174, height = 150, units = "mm")
 
